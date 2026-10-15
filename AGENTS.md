@@ -10,7 +10,26 @@ Valence is an open-source, zero-knowledge, end-to-end encrypted messaging platfo
 - Backend: Kotlin, Ktor. Asynchronous and lightweight.
 - CI: GitHub Actions.
 
-The authoritative design lives in `ARCHITECTURE.md`. Read the sections relevant to your task before writing code. If code and `ARCHITECTURE.md` disagree, `ARCHITECTURE.md` wins. If `ARCHITECTURE.md` is silent or ambiguous on a decision you need, stop and ask instead of improvising.
+The authoritative design lives in `docs/ARCHITECTURE.md`. Read the sections relevant to your task before writing code. If code and `ARCHITECTURE.md` disagree, `ARCHITECTURE.md` wins. If `ARCHITECTURE.md` is silent or ambiguous on a decision you need, stop and ask instead of improvising.
+
+## Repository Map
+
+This is a monorepo with two independent builds. There is no root Gradle build.
+
+| Path | Contents | Build |
+|---|---|---|
+| `android/` | Android client: Kotlin, Jetpack Compose, Hilt, Room, multi-module | Own Gradle build and wrapper. Run Gradle commands from inside `android/`. |
+| `server/` | Backend: Kotlin, Ktor | Own Gradle build and wrapper. Run Gradle commands from inside `server/`. |
+| `protocol/` | Shared contract between client and server: message formats, cryptographic protocol, API definitions, test vectors | Not a build of its own. Treated as the source of truth for both sides. |
+| `docs/` | Documentation, including `docs/ARCHITECTURE.md` | None. |
+
+Rules for working across these areas:
+
+- `android/` and `server/` never import each other's code. They communicate only through the contract defined in `protocol/`.
+- `protocol/` is the single source of truth for anything both sides must agree on. If client and server behavior disagree, `protocol/` decides which one is wrong.
+- Never change `protocol/` as a side effect of a client or server task. A change there affects both sides, so it needs its own task and explicit approval.
+- A task normally touches one area only. If a task seems to require changes in more than one, stop and ask.
+- Run all Gradle commands from the directory of the build you are working on, for example `cd android` then `.\gradlew.bat test`.
 
 ## Working Mode
 
@@ -87,17 +106,21 @@ This is the highest-risk area of the project. Special rules apply.
 - Crypto-related code additionally requires tests against known-answer vectors where the library provides them.
 - Do not weaken, delete, or skip an existing test to make a build pass. If a test seems wrong, report it.
 
+If any of these tasks do not exist in the build yet, say so instead of silently skipping them. Architecture tests are part of `test`; a failing architecture test means the change violates the rules above and must be fixed in the code, not in the test.
+
 ## Verification
 
-Before declaring a task complete, run these and make sure they pass. Use the Gradle wrapper for the platform: `.\gradlew.bat` on Windows PowerShell, `./gradlew` on Linux, macOS, and in CI.
+Run the checks for the build you changed, from inside its directory. Use `.\gradlew.bat` on Windows PowerShell and `./gradlew` on Linux, macOS, and in CI.
 
-```
-.\gradlew.bat ktlintCheck detekt
-.\gradlew.bat test
-.\gradlew.bat assembleDebug
-```
+Android, from `android/`:
 
-If any of these tasks do not exist in the build yet, say so instead of silently skipping them. Architecture tests are part of `test`; a failing architecture test means the change violates the rules above and must be fixed in the code, not in the test.
+    .\gradlew.bat test
+    .\gradlew.bat assembleDebug
+
+Server, from `server/`:
+
+    .\gradlew.bat test
+    .\gradlew.bat build
 
 ## Environment Notes
 
