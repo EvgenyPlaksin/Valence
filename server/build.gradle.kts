@@ -1,41 +1,40 @@
 plugins {
-    alias(libs.plugins.kotlin.jvm).apply(false)
-    kotlin("jvm") version "2.1.0"
-    kotlin("plugin.serialization") version "2.1.0"
+    kotlin("jvm") version "2.3.21"
+    kotlin("plugin.serialization") version "2.3.21"
     application
 }
 
-group = "com.valence"
+group = "com.lnight.valence"
 version = "0.1.0-SNAPSHOT"
 
 application {
-    mainClass.set("com.valence.server.ApplicationKt")
+    mainClass.set("com.lnight.valence.server.ApplicationKt")
 }
 
 repositories {
     mavenCentral()
 }
 
-val ktorVersion = "3.0.3"
-val logbackVersion = "1.5.16"
-
 dependencies {
-    implementation("io.ktor:ktor-server-core-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-netty-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-websockets-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-content-negotiation-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-serialization-kotlinx-json-jvm:$ktorVersion")
+    implementation("com.lnight.valence:protocol")
 
-    implementation("ch.qos.logback:logback-classic:$logbackVersion")
+    implementation("io.ktor:ktor-server-core:3.6.0")
+    implementation("io.ktor:ktor-server-netty:3.6.0")
+    implementation("io.ktor:ktor-server-content-negotiation:3.6.0")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.0")
 
-    testImplementation("io.ktor:ktor-server-test-host-jvm:$ktorVersion")
+    implementation("ch.qos.logback:logback-classic:1.5.16")
+
+    testImplementation("io.ktor:ktor-server-test-host:3.6.0")
+    testImplementation("io.ktor:ktor-client-content-negotiation:3.6.0")
+    testImplementation(testFixtures("com.lnight.valence:protocol"))
     testImplementation(kotlin("test"))
-}
-
-tasks.test {
-    useJUnitPlatform()
 }
 
 kotlin {
     jvmToolchain(21)
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
