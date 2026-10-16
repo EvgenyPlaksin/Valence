@@ -3,9 +3,6 @@ name: Protocol
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "protocol/**"
-      - ".github/workflows/protocol.yml"
   push:
     branches: [main]
     paths:
@@ -20,7 +17,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  protocol:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
