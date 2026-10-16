@@ -1,7 +1,7 @@
 package com.lnight.valence
 
-import dagger.hilt.android.HiltAndroidApp
 import android.app.Application
+import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
 class ValenceApplication : Application()
