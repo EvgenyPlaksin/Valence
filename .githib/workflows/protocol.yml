@@ -1,0 +1,40 @@
+name: Protocol
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "protocol/**"
+      - ".github/workflows/protocol.yml"
+  push:
+    branches: [main]
+    paths:
+      - "protocol/**"
+      - ".github/workflows/protocol.yml"
+
+concurrency:
+  group: protocol-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: protocol
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Build and test
+        run: ./gradlew build
