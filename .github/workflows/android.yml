@@ -37,5 +37,8 @@ jobs:
       - name: Check formatting and static analysis
         run: ./gradlew spotlessCheck detekt
 
+      - name: Architecture tests
+        run: ./gradlew :architecture-tests:test
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug
