@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.1 |
+| **Status** | Draft v1.2 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -218,16 +218,29 @@ app ──────────► features:*:impl ──► features:*:api
 
 Enforced rules:
 
-1. `features:X:impl` **must not** depend on `features:Y:impl` for any Y ≠ X. It may depend on `features:Y:api`.
-2. `features:*:api` modules depend only on `:core:model` and `:core:common`.
-3. `features:*` **must not** depend on `:core:database`, `:core:network`, `:core:crypto`, or `protocol`. They consume only repository interfaces from `:core:model`.
-4. `:core:model` and `:core:common` have no Android or third-party runtime dependencies other than kotlinx.
-5. `:app` is the only module that sees every `impl`. It wires them through Hilt.
-6. `:api` modules contain only interfaces, navigation route definitions, and immutable value types.
-7. libsignal is a dependency of `:core:crypto` only. On the client, only `:core:network` depends on `protocol`.
-8. Classes in `..domain..` packages of `impl` modules import only the Kotlin standard library, kotlinx.coroutines, `:core:model` and `:core:common` types, and `javax.inject.Inject`.
+Every module has a defined set of modules it may depend on, and any other dependency fails the build. A module without a rule also fails, so a new module must be added to the rules deliberately.
 
-Rules 1 to 7 are verified at module level by a Gradle dependency-graph check task. Rule 8 and the other source-level rules in section 5 are verified by Konsist tests. Both run in CI.
+| Module | May depend on |
+|---|---|
+| `:app` | Any module (composition root) |
+| `:features:X:impl` | `:features:*:api`, `:core:model`, `:core:common`, `:core:ui-theme` |
+| `:features:X:api` | `:core:model`, `:core:common` |
+| `:core:data` | `:core:model`, `:core:common`, `:core:crypto`, `:core:database`, `:core:network` |
+| `:core:crypto`, `:core:database`, `:core:network` | `:core:model`, `:core:common` |
+| `:core:common` | `:core:model` |
+| `:core:model`, `:core:ui-theme` | No other module |
+
+Additional rules:
+
+1. Only `:app` may depend on a `features:*:impl` module. Features reach each other only through `api` modules.
+2. Features consume repository interfaces from `:core:model` only. They never depend on `:core:data`, `:core:database`, `:core:network`, `:core:crypto`, or `protocol`.
+3. `:core:model`, `:core:common`, and `features:*:api` modules use no libraries other than Kotlin and kotlinx.
+4. `:app` is the only module that sees every `impl`. It wires them through Hilt.
+5. `:api` modules contain only interfaces, navigation route definitions, and immutable value types. This rule is enforced by review.
+6. libsignal is a dependency of `:core:crypto` only. On the client, only `:core:network` depends on `protocol`.
+7. Classes in `..domain..` packages of `impl` modules import only the Kotlin standard library, kotlinx.coroutines, `:core:model` and `:core:common` types, `features:*:api` types, types of their own `domain` package tree, and `javax.inject.Inject`.
+
+The table and rules 1 to 4 and 6 are verified at module level by the Gradle task `checkModuleGraph`, which reads the dependency model of the build and therefore also sees dependencies added by convention plugins. Rule 7 and the other source-level rules in section 5 are verified by Konsist tests. Both run in CI.
 
 ### 2.4 Feature Decoupling
 
@@ -265,7 +278,7 @@ interface ConversationFeatureModule {
 
 Each `impl` module follows the same internal layering: `ui` (Compose screens, stateless), `presentation` (ViewModel with a single immutable `UiState` and a sealed `UiEvent`/`UiAction` pair), `domain` (use cases, one public `operator fun invoke` each). Unidirectional data flow is mandatory.
 
-The `domain` package is pure Kotlin apart from `@Inject` on use-case constructors (rule 8). It never imports Android, Room, Ktor, or Hilt types.
+The `domain` package is pure Kotlin apart from `@Inject` on use-case constructors (rule 7). It never imports Android, Room, Ktor, or Hilt types.
 
 ---
 
@@ -772,8 +785,8 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 
 **Architecture enforcement.** Two mechanisms run in CI:
 
-- A Gradle dependency-graph check task verifies the module-level rules 1 to 7 of section 2.3.
-- Konsist tests verify source-level rules: imports in `..domain..` packages follow rule 8, libsignal is imported only inside `:core:crypto`, no feature imports another feature's `impl` packages, ViewModels do not import data-layer packages, and mappers are injected classes.
+- The Gradle task `checkModuleGraph` verifies the module-level rules of section 2.3 against the actual dependency model of the build.
+- Konsist tests verify source-level rules: imports in `..domain..` packages follow rule 7, libsignal is imported only inside `:core:crypto`, no feature imports another feature's `impl` packages, `api` packages import no `impl` packages, ViewModels do not import data-layer packages, use cases reside in `domain` packages and expose a single public `operator fun invoke`, mappers are injected classes, and field injection is limited to Android entry points.
 
 **Observability.** The server emits only aggregate counters (connections, enqueue rate, queue depth, error codes). No identifiers or payload fields are logged. Client logging is compiled out in release builds for all `:core:crypto` and `:core:data` packages.
 
@@ -837,3 +850,13 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - Domain packages may import `javax.inject.Inject` and nothing else from injection frameworks. Source-level rules are enforced with Konsist alongside the Gradle graph check.
 - Schema: `ratchet_session` and `skipped_message_key` replaced by `signal_session`. Added `kyber_prekey`, `delivery_key`, `sender_certificate`, and `contact.delivery_key`. `server_seq` is now set only on inbound rows (the previous design could collide the sender's and the recipient's sequences in one unique index). `outbox.envelope_blob` is nullable until encrypted. The sender mailbox ID is no longer repeated inside the plaintext.
 - Fixed the cross-reference from the schema to the atomic-persistence description (4.3, previously cited as 4.4).
+
+## Appendix C: Changes from v1.1
+
+- Dependency rules restated as a per-module allowlist enforced by `checkModuleGraph`: any dependency not listed fails, and a module without a rule fails.
+- Rules 1 and 5 merged: only `:app` may depend on an `impl` module.
+- Features may not depend on `:core:data`, so they see repository interfaces only and never implementations.
+- Core layering made explicit: `crypto`, `database`, and `network` depend only on `model` and `common`, and never on each other or on `data`.
+- `:core:model`, `:core:common`, and feature `api` modules are restricted to Kotlin and kotlinx libraries.
+- Domain packages may additionally import feature `api` types and their own `domain` package tree.
+- Konsist rules added for use cases (domain package, single `operator fun invoke`), injected mappers, and field injection limited to Android entry points.
