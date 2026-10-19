@@ -1,5 +1,5 @@
 plugins {
-    kotlin("jvm") version "2.3.21"
+    kotlin("jvm") version "2.4.21"
     kotlin("plugin.serialization") version "2.3.21"
     application
 }
@@ -23,7 +23,7 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation:3.6.0")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.0")
 
-    implementation("ch.qos.logback:logback-classic:1.5.16")
+    implementation("ch.qos.logback:logback-classic:1.6.5")
 
     testImplementation("io.ktor:ktor-server-test-host:3.6.0")
     testImplementation("io.ktor:ktor-client-content-negotiation:3.6.0")
