@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.hilt) apply false
     alias(libs.plugins.spotless)
     alias(libs.plugins.detekt)
+    id("valence.module-graph")
 }
 
 spotless {
