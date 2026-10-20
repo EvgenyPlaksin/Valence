@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.3 |
+| **Status** | Draft v1.4 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -279,6 +279,23 @@ interface ConversationFeatureModule {
 Each `impl` module follows the same internal layering: `ui` (Compose screens, stateless), `presentation` (ViewModel with a single immutable `UiState` and a sealed `UiEvent`/`UiAction` pair), `domain` (use cases, one public `operator fun invoke` each). Unidirectional data flow is mandatory.
 
 The `domain` package is pure Kotlin apart from `@Inject` on use-case constructors (rule 7). It never imports Android, Room, Ktor, or Hilt types.
+
+### 2.6 Server Structure
+
+The server is one Gradle module organised in four layers. Each layer is a package under `com.lnight.valence.server`.
+
+| Package | Contents | May import |
+|---|---|---|
+| `routes` | Ktor routing and WebSocket handlers. They map `protocol` DTOs to domain types and call the domain. No business rules. | Ktor, `protocol`, `domain` |
+| `domain` | Business rules and the ports they need: mailbox lookup, delivery key verification, TTL, sequencing, rate limits. Framework-free. | Kotlin, kotlinx.coroutines, `java.time`, `java.security.MessageDigest`, its own package |
+| `store` | Persistence adapters that implement domain ports | `domain`, database libraries |
+| `crypto` | The only package that may use libsignal, for signature verification and sender certificates | `domain`, libsignal |
+
+`Application.kt` is the composition root and wires the layers together. `routes` never imports `store`, and `store` never imports Ktor or `routes`. The `domain` package never imports `protocol` DTOs, which mirrors the client rule that only the network layer sees them.
+
+A Gradle task verifies that the server's production dependencies stay within an allowlist: Kotlin, kotlinx, Ktor, Logback, and `protocol`. Adding a library, including libsignal, is therefore a deliberate edit to the allowlist. Konsist tests verify the package rules above.
+
+The blind-router rule of 1.6 and the observability rule of section 5 are backed by a tripwire test: no log statement may mention envelopes, mailbox ids, delivery keys, identity keys, tokens, or proofs. The test is a text heuristic that catches single-line log statements, so code review remains necessary.
 
 ---
 
@@ -890,3 +907,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - Section 3.1 gains field semantics: timestamp units, the optional `ttlSeconds` with a 30-day default and cap, inclusive `upToServerSeq`, exclusive `afterServerSeq`, and the handling of error codes.
 - Prekey ids are specified: client-assigned, persisted per-kind counters, never reused, positive 32-bit integers, separate namespaces per kind, opaque to the server.
 - Four open decisions added: registration challenge, prekey management API, unknown frame types, and the location of the plaintext structure.
+
+## Appendix E: Changes from v1.3
+
+- Added section 2.6, the server structure: `routes`, `domain`, `store`, and `crypto` layers with import rules, a dependency allowlist, and a logging tripwire that backs the blind-router contract.
