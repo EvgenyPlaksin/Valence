@@ -6,6 +6,8 @@ on:
   push:
     branches: [main]
     paths:
+      - ".editorconfig"
+      - "config/**"
       - "server/**"
       - "protocol/**"
       - ".github/workflows/server.yml"
