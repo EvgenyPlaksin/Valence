@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.2 |
+| **Status** | Draft v1.3 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -377,6 +377,25 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
   "expiresAt": 1760086400000
 }
 ```
+
+**Field semantics.**
+
+- `v` is the integer protocol version of a body. The current version is 1. The server accepts N and N-1.
+- `serverTs` and `expiresAt` are Unix epoch milliseconds in UTC. `serverTs` is the server's clock at the moment it accepts a message, never the sender's clock.
+- `envelope` is the Base64URL encoding of the sealed envelope (1.6). The server treats it as opaque bytes.
+- `ttlSeconds` is optional and states how long the server may keep an uncollected message. If it is absent, the server applies its default of 30 days. The server clamps larger values to 30 days and rejects values below 1 with `400`.
+- `serverSeq` is a 64-bit integer assigned by the server when it enqueues a message. It is strictly increasing per mailbox, starts at 1, and is never reused. Gaps are possible, for example after the TTL deleted messages.
+- `upToServerSeq` in `delivery.confirm` is inclusive and cumulative. The client states that it has durably stored every message with `serverSeq` less than or equal to N, and the server may delete all of them. Repeating a confirmation, or sending a lower value than before, has no effect.
+- `afterServerSeq` in `sync.resume` is exclusive. The client sends the highest `serverSeq` it has confirmed, or 0 on the first connection, and the server replays every stored message with a greater `serverSeq` in ascending order.
+- `code` in `error` is machine-readable. v1 defines only `RATE_LIMITED`. A client treats any code it does not know as unknown. `retryAfterMs` is the wait before retrying, in milliseconds. The HTTP equivalent is the `Retry-After` header, which counts in seconds.
+
+**Keys and prekey ids.**
+
+- `identityKey` and every `pub` are public keys. `sig` is the identity key's signature over the corresponding `pub`. One-time prekeys carry no signature.
+- A prekey `id` is assigned by the client that owns the key, at the moment it generates the key. Ids come from a counter that is persisted per key kind and never reused. An id is a positive 32-bit integer (1 to 2,147,483,647).
+- Signed, Kyber, and one-time prekeys have separate id namespaces. Id 3 can exist as a signed prekey, a Kyber prekey, and a one-time prekey at the same time. The client and server schemas (3.2, 4.3) already store each kind separately.
+- The server treats an id as an opaque label. It stores the id with the key and returns it unchanged. An upload that repeats an id of the same kind in the same mailbox is rejected.
+- The sender names the prekeys it used by id in its first message, and the recipient uses those ids to find the matching private keys. Because ids are never reused, a bundle fetched earlier can never point to a different key than the one the sender saw.
 
 **Decrypted plaintext structure** (never visible to the server):
 
@@ -812,6 +831,10 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Group messaging | Pairwise fan-out vs. sender keys | Out of scope for v1; libsignal provides sender keys for a later version |
 | Inbox store | PostgreSQL vs. Redis Streams | PostgreSQL for durability; Redis for fan-out signalling only |
 | Attachments | Encrypted blob store with client-held keys | Separate spec; the message plaintext carries only the blob reference and key |
+| Registration challenge | How the client obtains the server-issued challenge that `proof` signs in `POST /v1/register` | Specify together with the server work. The registration body is not part of the wire contract until then. |
+| Prekey management API | How a client uploads a rotated signed or Kyber prekey, replenishes one-time prekeys, and learns how many remain | JWT-authenticated endpoints under `/v1/prekeys`. Specify together with the server work. Registration (1.3) already defines the initial upload. |
+| Unknown frame types | Ignore vs. close the connection when a frame `type` is not recognised | Clients ignore unknown server frame types, and the server answers an unknown client frame type with an `error` frame. Not implemented yet: decoding currently fails on an unknown `type`. |
+| Plaintext structure location | `protocol/` vs. a client-only module | Keep the definition and golden fixtures in `protocol/`, and expose it to `:core:data` through a codec interface in `:core:model` that `:core:network` implements, so rule 6 of section 2.3 still holds. |
 
 ---
 
@@ -861,3 +884,9 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - Domain packages may additionally import feature `api` types and their own `domain` package tree.
 - Konsist rules added for use cases (domain package, single `operator fun invoke`), injected mappers, and field injection limited to Android entry points.
 - Project licence decided: AGPL-3.0.
+
+## Appendix D: Changes from v1.2
+
+- Section 3.1 gains field semantics: timestamp units, the optional `ttlSeconds` with a 30-day default and cap, inclusive `upToServerSeq`, exclusive `afterServerSeq`, and the handling of error codes.
+- Prekey ids are specified: client-assigned, persisted per-kind counters, never reused, positive 32-bit integers, separate namespaces per kind, opaque to the server.
+- Four open decisions added: registration challenge, prekey management API, unknown frame types, and the location of the plaintext structure.
