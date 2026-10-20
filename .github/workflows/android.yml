@@ -6,6 +6,8 @@ on:
   push:
     branches: [main]
     paths:
+      - ".editorconfig"
+      - "config/**"
       - "android/**"
       - "protocol/**"
       - ".github/workflows/android.yml"
