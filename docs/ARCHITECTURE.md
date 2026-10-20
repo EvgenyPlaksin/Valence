@@ -803,7 +803,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Decision | Options | Status and recommendation |
 |---|---|---|
 | Crypto library | libsignal vs. Tink with a custom ratchet vs. Olm/vodozemac | **Decided: libsignal.** See Appendix A. |
-| Project licence | AGPL-3.0 vs. other | Must be AGPL-3.0 compatible because of libsignal. Recommendation: AGPL-3.0. **Needs maintainer confirmation before the first crypto task.** |
+| Project licence | AGPL-3.0 vs. other | **Decided: AGPL-3.0.** libsignal is AGPL-3.0, so the combined work must be distributed under a compatible licence. |
 | Unseal API split | Pinned libsignal exposes unsealing separately from session decryption, or it does not | Verify when the dependency is added. If not, run K = 1 or add a thin adapter (see 4.3). |
 | Kyber prekeys | Last-resort only (v1) vs. one-time plus last-resort | Last-resort only in v1; add one-time Kyber prekeys before any public release. |
 | Certificate trust root | Where the pinned trust root comes from and how it rotates | Ship the public key in the app; rotation through an app update. Specify before server work on certificates. |
@@ -860,3 +860,4 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - `:core:model`, `:core:common`, and feature `api` modules are restricted to Kotlin and kotlinx libraries.
 - Domain packages may additionally import feature `api` types and their own `domain` package tree.
 - Konsist rules added for use cases (domain package, single `operator fun invoke`), injected mappers, and field injection limited to Android entry points.
+- Project licence decided: AGPL-3.0.
