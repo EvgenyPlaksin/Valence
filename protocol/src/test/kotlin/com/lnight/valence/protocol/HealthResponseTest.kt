@@ -7,11 +7,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
 class HealthResponseTest {
-
-    private val json = Json {
-        prettyPrint = true
-        encodeDefaults = true
-    }
+    private val json =
+        Json {
+            prettyPrint = true
+            encodeDefaults = true
+        }
 
     @Test
     fun serializesToMatchGoldenFixture() {
