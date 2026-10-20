@@ -7,5 +7,5 @@ import kotlinx.serialization.Serializable
 data class HealthResponse(
     @SerialName("v")
     val version: Int = 1,
-    val status: String = "ok"
+    val status: String = "ok",
 )

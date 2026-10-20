@@ -14,18 +14,18 @@ spotless {
     kotlin {
         target("**/*.kt")
         targetExclude("**/build/**", "**/.gradle/**")
-        ktlint()
+        ktlint().setEditorConfigPath(file("../.editorconfig"))
     }
     kotlinGradle {
         target("**/*.kts")
         targetExclude("**/build/**", "**/.gradle/**")
-        ktlint()
+        ktlint().setEditorConfigPath(file("../.editorconfig"))
     }
 }
 
 detekt {
     buildUponDefaultConfig = true
-    config.setFrom(file("config/detekt/detekt.yml"))
+    config.setFrom(file("../config/detekt/detekt.yml"))
     source.setFrom(
         fileTree(projectDir) {
             include("**/src/**/*.kt", "**/src/**/*.kts")
