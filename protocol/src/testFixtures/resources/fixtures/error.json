@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "v": 1,
+  "code": "RATE_LIMITED",
+  "retryAfterMs": 2000
+}
