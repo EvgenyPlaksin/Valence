@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.4 |
+| **Status** | Draft v1.5 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -59,22 +59,51 @@ Ephemeral and ratchet keys are created and rotated inside libsignal. Valence nev
 
 The **mailbox ID** is the only server-visible address. It is a random 128-bit value (`mbx_` plus base32), generated client-side, not derived from phone number, e-mail, or username. Contact discovery maps human identifiers to mailbox IDs out of band (QR code, invite link, or an optional hashed-contact directory that is disabled by default). The invite link or QR code also carries the contact's delivery key.
 
-### 1.3 Registration Handshake
+### 1.3 Registration and Login
 
 ```
 Client                                                     Ktor Server
   | generate IK, SPK, KPK, OPK[100], DK                         |
   | sign SPK and KPK with IK                                    |
+  |-- POST /v1/auth/challenge ---------------------------------->|
+  |<-- 200 { challenge, expiresAt } -----------------------------|
+  | sign the registration message with IK -> proof               |
   |-- POST /v1/register ---------------------------------------->|
-  |   { mailboxId, identityKey, signedPreKey{id,pub,sig},        |
-  |     kyberPreKey{id,pub,sig}, oneTimePreKeys[{id,pub}],       |
-  |     deliveryKeyHash, proof }                                 |
-  |                                                              | verify signatures under IK
-  |                                                              | verify proof-of-possession of IK
-  |<-- 201 { accessToken(short JWT), refreshToken } -------------|
+  |   { challenge, mailboxId, identityKey, signedPreKey,         |
+  |     kyberPreKey, oneTimePreKeys, deliveryKeyHash, proof }    |
+  |                                                              | verify challenge MAC and expiry
+  |                                                              | verify proof under IK
+  |                                                              | verify prekey signatures under IK
+  |<-- 201 { accessToken, expiresAt } ----------------------------|
 ```
 
-`proof` is a signature under IK over the server-issued registration challenge, binding the mailbox to the identity key. The server stores public keys and the delivery key hash only. The JWT authorises key management, sender-certificate issuance, and the receive socket. It is never attached to message sends (see 1.6).
+The server stores public keys and the delivery key hash only. The access token authorises key management, sender-certificate issuance, and the receive socket. It is never attached to message sends (see 1.6).
+
+**Challenge.** `POST /v1/auth/challenge` needs no credentials and no body. The server returns an opaque challenge of 56 bytes: a 16-byte random nonce, an 8-byte big-endian expiry in Unix milliseconds, and a 32-byte HMAC-SHA256 over `"valence/challenge/v1" || nonce || expiry` under a server challenge key. The challenge is Base64URL encoded and valid for 60 seconds. The server stores nothing about a challenge. It recognises one by recomputing the HMAC and trusts only the expiry inside the MAC-protected bytes. The challenge key is separate from the token signing key. During a key rotation the server accepts the previous key for 60 seconds. Clients treat the challenge as opaque.
+
+**Signed messages.** A client proves possession of its identity key by signing a message with it. A message is a concatenation of fields, each preceded by its length as a 4-byte big-endian integer, so field boundaries are unambiguous. The first field is a purpose tag, so a signature made for one purpose never validates for another. The signature is libsignal's 64-byte identity-key signature.
+
+| Purpose | Fields, in order |
+|---|---|
+| Registration | `valence/register/v1`, challenge (decoded bytes), mailbox ID (ASCII), identity key (serialised public key), delivery key hash (32 bytes) |
+| Login | `valence/login/v1`, challenge (decoded bytes), mailbox ID (ASCII) |
+
+The byte layout is defined once, in `protocol/`, and covered by golden vectors.
+
+**Registration checks.** The server checks in this order, cheapest first:
+
+1. The body is well formed and its version is supported, otherwise `400`.
+2. The challenge MAC is valid and the challenge has not expired, otherwise `401`.
+3. `proof` verifies under the uploaded identity key over the message the server rebuilds from the received fields, otherwise `401`.
+4. Both prekey signatures verify under the same identity key, otherwise `401`.
+5. Ids, counts, and key sizes are valid, otherwise `400`.
+6. One transaction inserts the mailbox, the identity key, the delivery key hash, and the one-time prekeys. A mailbox ID that already exists returns `409`.
+
+**Login.** A client that already has an account obtains an access token with the same challenge endpoint and `POST /v1/auth/token`. The server verifies the challenge as above, loads the identity key stored for the mailbox, rebuilds the login message, and verifies the signature. An unknown mailbox and an invalid signature both return `401`.
+
+**Access tokens.** An access token is a JWT with the claims `sub` (the mailbox ID), `iat`, and `exp`, which follow the JWT convention of Unix seconds. Tokens are valid for one hour and signed under a server key that is separate from the challenge key. There are no refresh tokens: a client whose token expired logs in again. A login needs an identity-key signature without user interaction, so the Android Keystore key that wraps the identity key must not require user authentication per use.
+
+**Properties.** A challenge is not single-use within its 60 seconds. Replaying a captured registration returns `409`, because the mailbox already exists. Replaying a captured login signature would require breaking TLS, which would expose tokens directly anyway. If strict single use is wanted later, a small shared cache of used nonces adds it.
 
 ### 1.4 Session Establishment (PQXDH)
 
@@ -289,7 +318,7 @@ The server is one Gradle module organised in four layers. Each layer is a packag
 | `routes` | Ktor routing and WebSocket handlers. They map `protocol` DTOs to domain types and call the domain. No business rules. | Ktor, `protocol`, `domain` |
 | `domain` | Business rules and the ports they need: mailbox lookup, delivery key verification, TTL, sequencing, rate limits. Framework-free. | Kotlin, kotlinx.coroutines, `java.time`, `java.security.MessageDigest`, its own package |
 | `store` | Persistence adapters that implement domain ports | `domain`, database libraries |
-| `crypto` | The only package that may use libsignal, for signature verification and sender certificates | `domain`, libsignal |
+| `crypto` | The only package that may use libsignal, for signature verification and sender certificates. It also implements challenge MACs and access token signing. | `domain`, libsignal |
 
 `Application.kt` is the composition root and wires the layers together. `routes` never imports `store`, and `store` never imports Ktor or `routes`. The `domain` package never imports `protocol` DTOs, which mirrors the client rule that only the network layer sees them.
 
@@ -395,6 +424,83 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 }
 ```
 
+**Auth challenge** (`POST /v1/auth/challenge`, no body, no credentials)
+
+```json
+{
+  "v": 1,
+  "challenge": "o_GcDVLnuEFk0PeqPBnihQAAAZnILapg3AvbRDgfBh0n2qmKIY6mkg43XfkU50P4TNzR_MK7vDU",
+  "expiresAt": 1760000060000
+}
+```
+
+**Registration** (`POST /v1/register`, no credentials)
+
+```json
+{
+  "v": 1,
+  "challenge": "o_Gc...vDU",
+  "mailboxId": "mbx_g4r2k7x5qmwv6bnzdcs3n4pe5a",
+  "identityKey": "BUBB...Xl8",
+  "signedPreKey": { "id": 1, "pub": "b7Xc...9d", "sig": "Qm4v...8w" },
+  "kyberPreKey": { "id": 1, "pub": "k9Lp...2f", "sig": "Tn7a...5c" },
+  "oneTimePreKeys": [ { "id": 1, "pub": "mC9e...Qw" }, { "id": 2, "pub": "Hq4s...Zt" } ],
+  "deliveryKeyHash": "okzXGtAP2XnoXQ2TBid7-UcFdh-qf7-T807d9PDTPQs",
+  "proof": "Rk2p...Jw"
+}
+```
+
+Response `201`, and the same body is the response of the login endpoint:
+
+```json
+{
+  "v": 1,
+  "accessToken": "eyJh...ifQ.c2ln...bm90",
+  "expiresAt": 1760003601000
+}
+```
+
+**Login** (`POST /v1/auth/token`, no credentials)
+
+```json
+{
+  "v": 1,
+  "mailboxId": "mbx_g4r2k7x5qmwv6bnzdcs3n4pe5a",
+  "challenge": "o_Gc...vDU",
+  "signature": "Vb8d...Ke"
+}
+```
+
+**Key status** (`GET /v1/keys/status`, JWT-authenticated)
+
+```json
+{
+  "v": 1,
+  "oneTimeRemaining": 17
+}
+```
+
+**Replace signed prekeys** (`PUT /v1/keys/signed`, JWT-authenticated, response `204`)
+
+```json
+{
+  "v": 1,
+  "signedPreKey": { "id": 2, "pub": "b7Xc...9d", "sig": "Qm4v...8w" },
+  "kyberPreKey": { "id": 2, "pub": "k9Lp...2f", "sig": "Tn7a...5c" }
+}
+```
+
+**Upload one-time prekeys** (`POST /v1/keys/one-time`, JWT-authenticated, response is the key status body)
+
+```json
+{
+  "v": 1,
+  "oneTimePreKeys": [ { "id": 101, "pub": "mC9e...Qw" }, { "id": 102, "pub": "Hq4s...Zt" } ]
+}
+```
+
+The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/prekeys/{mailboxId}` fetches another mailbox's bundle with a delivery key and keeps its own prefix.
+
 **Field semantics.**
 
 - `v` is the integer protocol version of a body. The current version is 1. The server accepts N and N-1.
@@ -412,6 +518,9 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 - A prekey `id` is assigned by the client that owns the key, at the moment it generates the key. Ids come from a counter that is persisted per key kind and never reused. An id is a positive 32-bit integer (1 to 2,147,483,647).
 - Signed, Kyber, and one-time prekeys have separate id namespaces. Id 3 can exist as a signed prekey, a Kyber prekey, and a one-time prekey at the same time. The client and server schemas (3.2, 4.3) already store each kind separately.
 - The server treats an id as an opaque label. It stores the id with the key and returns it unchanged. An upload that repeats an id of the same kind in the same mailbox is rejected.
+- `challenge` is an opaque Base64URL string. `deliveryKeyHash` is the Base64URL SHA-256 of the delivery key. A mailbox ID is `mbx_` followed by 26 lowercase base32 characters.
+- `accessToken` is a JWT. Its `expiresAt` in the body is in milliseconds, while the `iat` and `exp` claims inside the JWT are in seconds.
+- Key management rules. The server verifies every `sig` under the mailbox's stored identity key and answers `400` for an invalid signature. `PUT /v1/keys/signed` replaces the signed and Kyber prekeys together and atomically. `POST /v1/keys/one-time` accepts 1 to 100 keys and answers `400` if the upload would leave more than 200 one-time prekeys stored. An id that already exists for the same kind returns `409`. A client keeps the private keys of rotated signed and Kyber prekeys for at least 30 days after rotation, because a bundle fetched before the rotation can still be used for a message that arrives within the 30-day TTL.
 - The sender names the prekeys it used by id in its first message, and the recipient uses those ids to find the matching private keys. Because ids are never reused, a bundle fetched earlier can never point to a different key than the one the sender saw.
 
 **Decrypted plaintext structure** (never visible to the server):
@@ -848,8 +957,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Group messaging | Pairwise fan-out vs. sender keys | Out of scope for v1; libsignal provides sender keys for a later version |
 | Inbox store | PostgreSQL vs. Redis Streams | PostgreSQL for durability; Redis for fan-out signalling only |
 | Attachments | Encrypted blob store with client-held keys | Separate spec; the message plaintext carries only the blob reference and key |
-| Registration challenge | How the client obtains the server-issued challenge that `proof` signs in `POST /v1/register` | Specify together with the server work. The registration body is not part of the wire contract until then. |
-| Prekey management API | How a client uploads a rotated signed or Kyber prekey, replenishes one-time prekeys, and learns how many remain | JWT-authenticated endpoints under `/v1/prekeys`. Specify together with the server work. Registration (1.3) already defines the initial upload. |
+| Registration abuse control | How to limit mass registration | Per-IP rate limits first. Proof-of-work can be added later because the challenge format can carry a puzzle. |
 | Unknown frame types | Ignore vs. close the connection when a frame `type` is not recognised | Clients ignore unknown server frame types, and the server answers an unknown client frame type with an `error` frame. Not implemented yet: decoding currently fails on an unknown `type`. |
 | Plaintext structure location | `protocol/` vs. a client-only module | Keep the definition and golden fixtures in `protocol/`, and expose it to `:core:data` through a codec interface in `:core:model` that `:core:network` implements, so rule 6 of section 2.3 still holds. |
 
@@ -911,3 +1019,10 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 ## Appendix E: Changes from v1.3
 
 - Added section 2.6, the server structure: `routes`, `domain`, `store`, and `crypto` layers with import rules, a dependency allowlist, and a logging tripwire that backs the blind-router contract.
+
+## Appendix F: Changes from v1.4
+
+- Registration is now a challenge-response flow. A stateless challenge endpoint (`POST /v1/auth/challenge`) issues a 56-byte MAC-protected challenge that lives 60 seconds, and `POST /v1/register` carries a proof signed over a length-prefixed message with a purpose tag.
+- Refresh tokens are removed. A client logs in again by signing a fresh challenge (`POST /v1/auth/token`). Access tokens are one-hour JWTs.
+- Key management endpoints added under `/v1/keys/`: status, replace signed prekeys, and upload one-time prekeys. Rotated private prekeys are kept for 30 days.
+- Open decisions: the registration challenge and prekey management API are resolved, and registration abuse control is added.
