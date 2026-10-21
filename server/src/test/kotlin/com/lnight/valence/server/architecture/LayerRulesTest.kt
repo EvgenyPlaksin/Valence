@@ -11,6 +11,7 @@ class LayerRulesTest {
             Regex("""kotlin\..+"""),
             Regex("""kotlinx\.coroutines(\..+)?"""),
             Regex("""java\.time(\..+)?"""),
+            Regex("""java\.nio\.ByteBuffer"""),
             Regex("""java\.security\.MessageDigest"""),
             Regex("""com\.lnight\.valence\.server\.domain(\..+)?"""),
         )
