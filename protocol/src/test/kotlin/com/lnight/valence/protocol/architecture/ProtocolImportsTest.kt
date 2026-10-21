@@ -10,6 +10,7 @@ class ProtocolImportsTest {
             Regex("""kotlin\..+"""),
             Regex("""kotlinx\.serialization(\..+)?"""),
             Regex("""java\.util\.Base64"""),
+            Regex("""java\.nio\.ByteBuffer"""),
             Regex("""com\.lnight\.valence\.protocol(\..+)?"""),
         )
 
