@@ -14,6 +14,17 @@ application {
 }
 
 repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "SignalBuildArtifacts"
+                url = uri("https://build-artifacts.signal.org/libraries/maven/")
+            }
+        }
+        filter {
+            includeGroup("org.signal")
+        }
+    }
     mavenCentral()
 }
 
@@ -24,6 +35,8 @@ dependencies {
     implementation("io.ktor:ktor-server-netty:3.6.0")
     implementation("io.ktor:ktor-server-content-negotiation:3.6.0")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.0")
+
+    implementation("org.signal:libsignal-server:0.106.0")
 
     implementation("ch.qos.logback:logback-classic:1.6.5")
 
@@ -60,7 +73,14 @@ detekt {
 }
 
 val allowedDependencyGroups =
-    setOf("org.jetbrains.kotlin", "org.jetbrains.kotlinx", "io.ktor", "ch.qos.logback", "com.lnight.valence")
+    setOf(
+        "org.jetbrains.kotlin",
+        "org.jetbrains.kotlinx",
+        "io.ktor",
+        "ch.qos.logback",
+        "com.lnight.valence",
+        "org.signal",
+    )
 
 val productionDependencies =
     provider {
