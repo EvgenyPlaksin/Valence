@@ -18,7 +18,7 @@ dependencies {
 
     testImplementation(kotlin("test"))
     testImplementation(testFixtures(project))
-    testImplementation("com.lemonappdev:konsist:0.18.0")
+    testImplementation("com.lemonappdev:konsist:0.18.1")
 }
 
 kotlin {

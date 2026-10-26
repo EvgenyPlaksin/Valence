@@ -44,7 +44,7 @@ dependencies {
     testImplementation("io.ktor:ktor-client-content-negotiation:3.6.0")
     testImplementation(testFixtures("com.lnight.valence:protocol"))
     testImplementation(kotlin("test"))
-    testImplementation("com.lemonappdev:konsist:0.18.0")
+    testImplementation("com.lemonappdev:konsist:0.18.1")
 }
 
 kotlin {
