@@ -37,11 +37,41 @@ updates:
           - "com.lemonappdev*"
 
   - package-ecosystem: gradle
-    directories:
-      - /server
-      - /protocol
+    directory: /protocol
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     commit-message:
       prefix: "build(deps)"
+    groups:
+      kotlin-toolchain:
+        patterns:
+          - "org.jetbrains.kotlin*"
+      code-quality:
+        patterns:
+          - "com.diffplug.spotless*"
+          - "dev.detekt*"
+          - "com.lemonappdev*"
+
+  - package-ecosystem: gradle
+    directory: /server
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      kotlin-toolchain:
+        patterns:
+          - "org.jetbrains.kotlin*"
+      ktor:
+        patterns:
+          - "io.ktor*"
+      code-quality:
+        patterns:
+          - "com.diffplug.spotless*"
+          - "dev.detekt*"
+          - "com.lemonappdev*"
+      libsignal:
+        patterns:
+          - "org.signal*"
