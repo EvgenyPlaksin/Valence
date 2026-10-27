@@ -7,9 +7,12 @@ import com.lnight.valence.server.crypto.JwtAccessTokenIssuer
 import com.lnight.valence.server.crypto.LibsignalPublicKeyVerifier
 import com.lnight.valence.server.crypto.SecureRandomBytes
 import com.lnight.valence.server.domain.ChallengeService
+import com.lnight.valence.server.domain.LoginService
 import com.lnight.valence.server.domain.RegistrationService
+import com.lnight.valence.server.routes.AuthTokenRequestMapper
 import com.lnight.valence.server.routes.RegisterRequestMapper
 import com.lnight.valence.server.routes.authRoutes
+import com.lnight.valence.server.routes.loginRoutes
 import com.lnight.valence.server.routes.registrationRoutes
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import io.ktor.serialization.kotlinx.json.json
@@ -34,21 +37,20 @@ fun main() {
             random = SecureRandomBytes(),
             authenticator = HmacChallengeAuthenticator(ServerConfig.challengeKey()),
         )
-    val registrationService =
-        RegistrationService(
-            challenges = challengeService,
-            keyVerifier = LibsignalPublicKeyVerifier(),
-            store = InMemoryMailboxStore(),
-            tokens = JwtAccessTokenIssuer(clock, ServerConfig.tokenKey()),
-            clock = clock,
-        )
-    embeddedServer(Netty, port = port, host = "0.0.0.0") { module(challengeService, registrationService) }
-        .start(wait = true)
+    val keyVerifier = LibsignalPublicKeyVerifier()
+    val store = InMemoryMailboxStore()
+    val tokens = JwtAccessTokenIssuer(clock, ServerConfig.tokenKey())
+    val registrationService = RegistrationService(challengeService, keyVerifier, store, tokens, clock)
+    val loginService = LoginService(challengeService, keyVerifier, store, tokens)
+    embeddedServer(Netty, port = port, host = "0.0.0.0") {
+        module(challengeService, registrationService, loginService)
+    }.start(wait = true)
 }
 
 fun Application.module(
     challengeService: ChallengeService,
     registrationService: RegistrationService,
+    loginService: LoginService,
 ) {
     install(ContentNegotiation) {
         json(ProtocolJson.json)
@@ -59,5 +61,6 @@ fun Application.module(
         }
         authRoutes(challengeService)
         registrationRoutes(registrationService, RegisterRequestMapper())
+        loginRoutes(loginService, AuthTokenRequestMapper())
     }
 }

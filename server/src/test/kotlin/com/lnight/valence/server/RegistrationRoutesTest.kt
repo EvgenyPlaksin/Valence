@@ -21,8 +21,14 @@ import kotlin.test.assertEquals
 
 class RegistrationRoutesTest {
     private fun ApplicationTestBuilder.start(verifier: PublicKeyVerifier = FakePublicKeyVerifier()) {
-        val service = RegistrationTestSupport.service(verifier = verifier, store = InMemoryMailboxStore())
-        application { module(ChallengeTestSupport.service(), service) }
+        val store = InMemoryMailboxStore()
+        application {
+            module(
+                ChallengeTestSupport.service(),
+                RegistrationTestSupport.service(verifier = verifier, store = store),
+                LoginTestSupport.service(verifier = verifier, store = store),
+            )
+        }
     }
 
     private suspend fun HttpClient.register(body: String): HttpResponse =

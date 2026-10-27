@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.7 |
+| **Status** | Draft v1.8 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -101,7 +101,13 @@ The byte layout is defined once, in `protocol/`, and covered by golden vectors.
 5. Both prekey signatures verify under the same identity key, otherwise `401`.
 6. One transaction inserts the mailbox, the identity key, the delivery key hash, and the one-time prekeys. A mailbox ID that already exists returns `409`.
 
-**Login.** A client that already has an account obtains an access token with the same challenge endpoint and `POST /v1/auth/token`. The server verifies the challenge as above, loads the identity key stored for the mailbox, rebuilds the login message, and verifies the signature. An unknown mailbox and an invalid signature both return `401`.
+**Login.** A client that already has an account obtains an access token with the same challenge endpoint and `POST /v1/auth/token`. The server checks in this order:
+
+1. The body is well formed and its version is supported, the challenge is 56 bytes, the mailbox ID has a valid format, and the signature is 64 bytes, otherwise `400`.
+2. The challenge MAC is valid and the challenge has not expired, otherwise `401`.
+3. The mailbox exists, and the signature verifies under the identity key stored for it over the login message the server rebuilds from the received fields, otherwise `401`.
+
+The identity key always comes from the server's own record, never from the request. An unknown mailbox and an invalid signature return the same `401` without a body. Response time is not equalised between them, because an unknown mailbox skips the signature verification. Mailbox ids are random 128-bit values, so probing for existing ones is impractical. Success returns `200` with the access token body.
 
 **Access tokens.** An access token is a JWT with the claims `sub` (the mailbox ID), `iat`, and `exp`, which follow the JWT convention of Unix seconds. Tokens are valid for one hour and signed with HMAC-SHA256 (`HS256`) under a server key that is separate from the challenge key. Only the server verifies tokens, so a symmetric key suffices. The server refuses to start if the two keys are identical. There are no refresh tokens: a client whose token expired logs in again. A login needs an identity-key signature without user interaction, so the Android Keystore key that wraps the identity key must not require user authentication per use.
 
@@ -1046,3 +1052,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - The server domain layer may import `SignedMessages` from `protocol/` and `java.nio.ByteBuffer`. Protocol DTOs remain forbidden there.
 - Registration requires 1 to 100 one-time prekeys with unique positive ids. The mailbox ID alphabet is specified.
 - libsignal joins the server's dependency allowlist.
+
+## Appendix I: Changes from v1.7
+
+- The login checks are specified in order: structure, then challenge, then mailbox and signature. The identity key is taken from the stored mailbox, an unknown mailbox and an invalid signature are indistinguishable by response, and the unequalised response time is documented.

@@ -6,6 +6,7 @@ import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PublicKeyVerifier
 
 internal class Verification(
+    val signerKey: ByteArray,
     val message: ByteArray,
     val signature: ByteArray,
 )
@@ -25,7 +26,7 @@ internal class FakePublicKeyVerifier(
         message: ByteArray,
         signature: ByteArray,
     ): Boolean {
-        verifications += Verification(message, signature)
+        verifications += Verification(signerKey, message, signature)
         return isSignatureValid(signature)
     }
 }

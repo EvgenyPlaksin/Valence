@@ -16,7 +16,9 @@ class AuthRoutesTest {
     @Test
     fun `challenge endpoint answers with the protocol fixture`() =
         testApplication {
-            application { module(ChallengeTestSupport.service(), RegistrationTestSupport.service()) }
+            application {
+                module(ChallengeTestSupport.service(), RegistrationTestSupport.service(), LoginTestSupport.service())
+            }
 
             val response = client.post(ProtocolRoutes.AUTH_CHALLENGE)
 
