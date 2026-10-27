@@ -13,6 +13,7 @@ class LayerRulesTest {
             Regex("""java\.time(\..+)?"""),
             Regex("""java\.nio\.ByteBuffer"""),
             Regex("""java\.security\.MessageDigest"""),
+            Regex("""com\.lnight\.valence\.protocol\.SignedMessages"""),
             Regex("""com\.lnight\.valence\.server\.domain(\..+)?"""),
         )
 
