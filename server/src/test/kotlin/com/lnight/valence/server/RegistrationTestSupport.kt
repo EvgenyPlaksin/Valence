@@ -1,12 +1,14 @@
 package com.lnight.valence.server
 
 import com.lnight.valence.protocol.Base64Url
+import com.lnight.valence.protocol.http.AuthTokenRequest
 import com.lnight.valence.protocol.http.KyberPreKeyDto
 import com.lnight.valence.protocol.http.OneTimePreKeyDto
 import com.lnight.valence.protocol.http.RegisterRequest
 import com.lnight.valence.protocol.http.SignedPreKeyDto
 import com.lnight.valence.server.domain.AccessToken
 import com.lnight.valence.server.domain.AccessTokenIssuer
+import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.MailboxStore
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PublicKeyVerifier
@@ -64,6 +66,23 @@ internal object RegistrationTestSupport {
                 ),
             deliveryKeyHash = Base64Url.encode(ByteArray(32) { 9 }),
             proof = Base64Url.encode(validProof),
+        )
+
+    fun mailbox(identityKey: ByteArray = ByteArray(33) { 4 }): Mailbox =
+        Mailbox(
+            id = MAILBOX_ID,
+            identityKey = identityKey,
+            signedPreKey = SignedPublicKey(1, ByteArray(33) { 5 }, signedPreKeySignature),
+            kyberPreKey = SignedPublicKey(1, ByteArray(1569) { 6 }, kyberPreKeySignature),
+            deliveryKeyHash = ByteArray(32) { 9 },
+            createdAtMillis = 0L,
+        )
+
+    fun authTokenRequest(): AuthTokenRequest =
+        AuthTokenRequest(
+            challenge = Base64Url.encode(ChallengeTestSupport.service().issue().bytes),
+            mailboxId = MAILBOX_ID,
+            signature = Base64Url.encode(ByteArray(64) { 1 }),
         )
 
     fun service(
