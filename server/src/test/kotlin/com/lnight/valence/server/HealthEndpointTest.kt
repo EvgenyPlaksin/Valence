@@ -23,7 +23,7 @@ class HealthEndpointTest {
     fun healthEndpointReturnsOkStatusAndBodyMatchesProtocolFixture() =
         testApplication {
             application {
-                module(ChallengeTestSupport.service())
+                module(ChallengeTestSupport.service(), RegistrationTestSupport.service())
             }
 
             val client =
