@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.6 |
+| **Status** | Draft v1.7 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -94,16 +94,16 @@ The byte layout is defined once, in `protocol/`, and covered by golden vectors.
 
 **Registration checks.** The server checks in this order, cheapest first:
 
-1. The body is well formed and its version is supported, otherwise `400`.
+1. The body is well formed and its version is supported, otherwise `400`. A challenge that is not 56 bytes long counts as a malformed body.
 2. The challenge MAC is valid and the challenge has not expired, otherwise `401`.
-3. `proof` verifies under the uploaded identity key over the message the server rebuilds from the received fields, otherwise `401`.
-4. Both prekey signatures verify under the same identity key, otherwise `401`.
-5. Ids, counts, and key sizes are valid, otherwise `400`.
+3. Ids, counts, and key sizes are valid, and every public key parses, otherwise `400`. Structural checks come before signature verification because a malformed key would otherwise surface as an invalid signature, and because they are cheaper.
+4. `proof` verifies under the uploaded identity key over the message the server rebuilds from the received fields, otherwise `401`.
+5. Both prekey signatures verify under the same identity key, otherwise `401`.
 6. One transaction inserts the mailbox, the identity key, the delivery key hash, and the one-time prekeys. A mailbox ID that already exists returns `409`.
 
 **Login.** A client that already has an account obtains an access token with the same challenge endpoint and `POST /v1/auth/token`. The server verifies the challenge as above, loads the identity key stored for the mailbox, rebuilds the login message, and verifies the signature. An unknown mailbox and an invalid signature both return `401`.
 
-**Access tokens.** An access token is a JWT with the claims `sub` (the mailbox ID), `iat`, and `exp`, which follow the JWT convention of Unix seconds. Tokens are valid for one hour and signed under a server key that is separate from the challenge key. There are no refresh tokens: a client whose token expired logs in again. A login needs an identity-key signature without user interaction, so the Android Keystore key that wraps the identity key must not require user authentication per use.
+**Access tokens.** An access token is a JWT with the claims `sub` (the mailbox ID), `iat`, and `exp`, which follow the JWT convention of Unix seconds. Tokens are valid for one hour and signed with HMAC-SHA256 (`HS256`) under a server key that is separate from the challenge key. Only the server verifies tokens, so a symmetric key suffices. The server refuses to start if the two keys are identical. There are no refresh tokens: a client whose token expired logs in again. A login needs an identity-key signature without user interaction, so the Android Keystore key that wraps the identity key must not require user authentication per use.
 
 **Properties.** A challenge is not single-use within its 60 seconds. Replaying a captured registration returns `409`, because the mailbox already exists. Replaying a captured login signature would require breaking TLS, which would expose tokens directly anyway. If strict single use is wanted later, a small shared cache of used nonces adds it.
 
@@ -318,13 +318,13 @@ The server is one Gradle module organised in four layers. Each layer is a packag
 | Package | Contents | May import |
 |---|---|---|
 | `routes` | Ktor routing and WebSocket handlers. They map `protocol` DTOs to domain types and call the domain. No business rules. | Ktor, `protocol`, `domain` |
-| `domain` | Business rules and the ports they need: mailbox lookup, delivery key verification, TTL, sequencing, rate limits. Framework-free. | Kotlin, kotlinx.coroutines, `java.time`, `java.security.MessageDigest`, its own package |
+| `domain` | Business rules and the ports they need: mailbox lookup, delivery key verification, TTL, sequencing, rate limits. Framework-free. | Kotlin, kotlinx.coroutines, `java.time`, `java.nio.ByteBuffer`, `java.security.MessageDigest`, `protocol`'s `SignedMessages`, its own package |
 | `store` | Persistence adapters that implement domain ports | `domain`, database libraries |
 | `crypto` | The only package that may use libsignal, for signature verification and sender certificates. It also implements challenge MACs and access token signing. | `domain`, libsignal |
 
-`Application.kt` is the composition root and wires the layers together. `routes` never imports `store`, and `store` never imports Ktor or `routes`. The `domain` package never imports `protocol` DTOs, which mirrors the client rule that only the network layer sees them.
+`Application.kt` is the composition root and wires the layers together. `routes` never imports `store`, and `store` never imports Ktor or `routes`. The `domain` package never imports `protocol` DTOs, which mirrors the client rule that only the network layer sees them. The one exception is `SignedMessages`, a pure function that defines the signed byte layouts, so that layout exists once and is covered by golden vectors.
 
-A Gradle task verifies that the server's production dependencies stay within an allowlist: Kotlin, kotlinx, Ktor, Logback, and `protocol`. Adding a library, including libsignal, is therefore a deliberate edit to the allowlist. Konsist tests verify the package rules above.
+A Gradle task verifies that the server's production dependencies stay within an allowlist: Kotlin, kotlinx, Ktor, Logback, `protocol`, and libsignal. Adding any further library is therefore a deliberate edit to the allowlist. Konsist tests verify the package rules above.
 
 Every libsignal capability sits behind a domain port and a single adapter in the `crypto` layer. `PublicKeyVerifier` is the first example. A libsignal API change therefore touches one package, and the adapters are tested against key pairs generated by the real library.
 
@@ -522,7 +522,7 @@ The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/
 - A prekey `id` is assigned by the client that owns the key, at the moment it generates the key. Ids come from a counter that is persisted per key kind and never reused. An id is a positive 32-bit integer (1 to 2,147,483,647).
 - Signed, Kyber, and one-time prekeys have separate id namespaces. Id 3 can exist as a signed prekey, a Kyber prekey, and a one-time prekey at the same time. The client and server schemas (3.2, 4.3) already store each kind separately.
 - The server treats an id as an opaque label. It stores the id with the key and returns it unchanged. An upload that repeats an id of the same kind in the same mailbox is rejected.
-- `challenge` is an opaque Base64URL string. `deliveryKeyHash` is the Base64URL SHA-256 of the delivery key. A mailbox ID is `mbx_` followed by 26 lowercase base32 characters.
+- `challenge` is an opaque Base64URL string. `deliveryKeyHash` is the Base64URL SHA-256 of the delivery key. A mailbox ID is `mbx_` followed by 26 lowercase base32 characters (`a` to `z` and `2` to `7`). Registration carries 1 to 100 one-time prekeys with unique positive ids.
 - `accessToken` is a JWT. Its `expiresAt` in the body is in milliseconds, while the `iat` and `exp` claims inside the JWT are in seconds.
 - Key management rules. The server verifies every `sig` under the mailbox's stored identity key and answers `400` for an invalid signature. `PUT /v1/keys/signed` replaces the signed and Kyber prekeys together and atomically. `POST /v1/keys/one-time` accepts 1 to 100 keys and answers `400` if the upload would leave more than 200 one-time prekeys stored. An id that already exists for the same kind returns `409`. A client keeps the private keys of rotated signed and Kyber prekeys for at least 30 days after rotation, because a bundle fetched before the rotation can still be used for a message that arrives within the 30-day TTL.
 - The sender names the prekeys it used by id in its first message, and the recipient uses those ids to find the matching private keys. Because ids are never reused, a bundle fetched earlier can never point to a different key than the one the sender saw.
@@ -1038,3 +1038,11 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - A prekey `sig` is specified as a signature over the exact serialised `pub` bytes, including the key type byte.
 - The libsignal distribution policy is recorded: Signal's own Maven repository restricted to the `org.signal` group, no third-party republications, the supported native platforms, and the resulting server platform constraint.
 - The server pins `org.signal:libsignal-server` 0.106.0 and confines it to adapters in the `crypto` layer.
+
+## Appendix H: Changes from v1.6
+
+- The registration checks run structural validation (ids, counts, key sizes, key parsing) before signature verification, and a challenge of the wrong length is a malformed body.
+- Access tokens are signed with HMAC-SHA256 under a key separate from the challenge key, and the server refuses to start if the two keys are identical.
+- The server domain layer may import `SignedMessages` from `protocol/` and `java.nio.ByteBuffer`. Protocol DTOs remain forbidden there.
+- Registration requires 1 to 100 one-time prekeys with unique positive ids. The mailbox ID alphabet is specified.
+- libsignal joins the server's dependency allowlist.
