@@ -38,7 +38,7 @@ dependencies {
 
     implementation("org.signal:libsignal-server:0.106.0")
 
-    implementation("ch.qos.logback:logback-classic:1.6.5")
+    implementation("ch.qos.logback:logback-classic:1.6.6")
 
     testImplementation("io.ktor:ktor-server-test-host:3.6.0")
     testImplementation("io.ktor:ktor-client-content-negotiation:3.6.0")
