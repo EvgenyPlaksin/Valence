@@ -7,4 +7,18 @@ interface MailboxStore {
     ): Boolean
 
     fun find(mailboxId: String): Mailbox?
+
+    fun oneTimePreKeyCount(mailboxId: String): Int?
+
+    fun replaceSignedPreKeys(
+        mailboxId: String,
+        signedPreKey: SignedPublicKey,
+        kyberPreKey: SignedPublicKey,
+    ): KeyStoreOutcome
+
+    fun addOneTimePreKeys(
+        mailboxId: String,
+        keys: List<OneTimePreKey>,
+        maxStored: Int,
+    ): KeyStoreOutcome
 }

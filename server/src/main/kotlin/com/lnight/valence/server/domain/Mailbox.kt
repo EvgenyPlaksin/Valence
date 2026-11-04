@@ -7,4 +7,9 @@ class Mailbox(
     val kyberPreKey: SignedPublicKey,
     val deliveryKeyHash: ByteArray,
     val createdAtMillis: Long,
-)
+) {
+    fun withSignedPreKeys(
+        signedPreKey: SignedPublicKey,
+        kyberPreKey: SignedPublicKey,
+    ): Mailbox = Mailbox(id, identityKey, signedPreKey, kyberPreKey, deliveryKeyHash, createdAtMillis)
+}
