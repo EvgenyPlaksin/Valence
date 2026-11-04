@@ -31,18 +31,18 @@ repositories {
 dependencies {
     implementation("com.lnight.valence:protocol")
 
-    implementation("io.ktor:ktor-server-core:3.6.0")
-    implementation("io.ktor:ktor-server-netty:3.6.0")
-    implementation("io.ktor:ktor-server-content-negotiation:3.6.0")
-    implementation("io.ktor:ktor-server-auth:3.6.0")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.0")
+    implementation("io.ktor:ktor-server-core:3.6.1")
+    implementation("io.ktor:ktor-server-netty:3.6.1")
+    implementation("io.ktor:ktor-server-content-negotiation:3.6.1")
+    implementation("io.ktor:ktor-server-auth:3.6.1")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.1")
 
     implementation("org.signal:libsignal-server:0.106.0")
 
     implementation("ch.qos.logback:logback-classic:1.6.6")
 
-    testImplementation("io.ktor:ktor-server-test-host:3.6.0")
-    testImplementation("io.ktor:ktor-client-content-negotiation:3.6.0")
+    testImplementation("io.ktor:ktor-server-test-host:3.6.1")
+    testImplementation("io.ktor:ktor-client-content-negotiation:3.6.1")
     testImplementation(testFixtures("com.lnight.valence:protocol"))
     testImplementation(kotlin("test"))
     testImplementation("com.lemonappdev:konsist:0.18.1")
