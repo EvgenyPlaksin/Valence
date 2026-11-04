@@ -34,6 +34,7 @@ dependencies {
     implementation("io.ktor:ktor-server-core:3.6.0")
     implementation("io.ktor:ktor-server-netty:3.6.0")
     implementation("io.ktor:ktor-server-content-negotiation:3.6.0")
+    implementation("io.ktor:ktor-server-auth:3.6.0")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.0")
 
     implementation("org.signal:libsignal-server:0.106.0")

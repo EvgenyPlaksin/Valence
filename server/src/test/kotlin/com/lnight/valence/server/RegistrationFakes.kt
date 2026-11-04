@@ -4,6 +4,7 @@ import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.MailboxStore
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PublicKeyVerifier
+import com.lnight.valence.server.store.InMemoryMailboxStore
 
 internal class Verification(
     val signerKey: ByteArray,
@@ -33,7 +34,8 @@ internal class FakePublicKeyVerifier(
 
 internal class RecordingMailboxStore(
     private val accepts: Boolean = true,
-) : MailboxStore {
+    private val delegate: MailboxStore = InMemoryMailboxStore(),
+) : MailboxStore by delegate {
     val created = mutableListOf<Mailbox>()
     val createdOneTimeKeys = mutableListOf<List<OneTimePreKey>>()
 
@@ -44,9 +46,8 @@ internal class RecordingMailboxStore(
         if (accepts) {
             created += mailbox
             createdOneTimeKeys += oneTimePreKeys
+            delegate.create(mailbox, oneTimePreKeys)
         }
         return accepts
     }
-
-    override fun find(mailboxId: String): Mailbox? = created.firstOrNull { it.id == mailboxId }
 }
