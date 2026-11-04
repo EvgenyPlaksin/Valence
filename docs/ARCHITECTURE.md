@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.8 |
+| **Status** | Draft v1.9 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -109,7 +109,7 @@ The byte layout is defined once, in `protocol/`, and covered by golden vectors.
 
 The identity key always comes from the server's own record, never from the request. An unknown mailbox and an invalid signature return the same `401` without a body. Response time is not equalised between them, because an unknown mailbox skips the signature verification. Mailbox ids are random 128-bit values, so probing for existing ones is impractical. Success returns `200` with the access token body.
 
-**Access tokens.** An access token is a JWT with the claims `sub` (the mailbox ID), `iat`, and `exp`, which follow the JWT convention of Unix seconds. Tokens are valid for one hour and signed with HMAC-SHA256 (`HS256`) under a server key that is separate from the challenge key. Only the server verifies tokens, so a symmetric key suffices. The server refuses to start if the two keys are identical. There are no refresh tokens: a client whose token expired logs in again. A login needs an identity-key signature without user interaction, so the Android Keystore key that wraps the identity key must not require user authentication per use.
+**Access tokens.** An access token is a JWT with the claims `sub` (the mailbox ID), `iat`, and `exp`, which follow the JWT convention of Unix seconds. Tokens are valid for one hour and signed with HMAC-SHA256 (`HS256`) under a server key that is separate from the challenge key. Only the server verifies tokens, so a symmetric key suffices. The server refuses to start if the two keys are identical. There are no refresh tokens: a client whose token expired logs in again. A token is presented as `Authorization: Bearer <token>`. The server accepts only `HS256`, so a token that claims `none` or any other algorithm is rejected. It compares the signature in constant time and checks `exp` against its own clock. A missing, invalid, or expired token returns `401` with no body. A login needs an identity-key signature without user interaction, so the Android Keystore key that wraps the identity key must not require user authentication per use.
 
 **Properties.** A challenge is not single-use within its 60 seconds. Replaying a captured registration returns `409`, because the mailbox already exists. Replaying a captured login signature would require breaking TLS, which would expose tokens directly anyway. If strict single use is wanted later, a small shared cache of used nonces adds it.
 
@@ -530,7 +530,7 @@ The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/
 - The server treats an id as an opaque label. It stores the id with the key and returns it unchanged. An upload that repeats an id of the same kind in the same mailbox is rejected.
 - `challenge` is an opaque Base64URL string. `deliveryKeyHash` is the Base64URL SHA-256 of the delivery key. A mailbox ID is `mbx_` followed by 26 lowercase base32 characters (`a` to `z` and `2` to `7`). Registration carries 1 to 100 one-time prekeys with unique positive ids.
 - `accessToken` is a JWT. Its `expiresAt` in the body is in milliseconds, while the `iat` and `exp` claims inside the JWT are in seconds.
-- Key management rules. The server verifies every `sig` under the mailbox's stored identity key and answers `400` for an invalid signature. `PUT /v1/keys/signed` replaces the signed and Kyber prekeys together and atomically. `POST /v1/keys/one-time` accepts 1 to 100 keys and answers `400` if the upload would leave more than 200 one-time prekeys stored. An id that already exists for the same kind returns `409`. A client keeps the private keys of rotated signed and Kyber prekeys for at least 30 days after rotation, because a bundle fetched before the rotation can still be used for a message that arrives within the 30-day TTL.
+- Key management rules. The server verifies every `sig` under the mailbox's stored identity key and answers `400` for an invalid signature. `PUT /v1/keys/signed` replaces the signed and Kyber prekeys together and atomically. `POST /v1/keys/one-time` accepts 1 to 100 keys and answers `400` if the upload would leave more than 200 one-time prekeys stored. An id that already exists for the same kind returns `409`. The authenticated key endpoints answer `401` when the token is missing, invalid, or expired, or when its mailbox no longer exists. `PUT /v1/keys/signed` answers `409` if either new id equals the id currently stored for that kind, and `204` on success. `POST /v1/keys/one-time` answers `409` if any id is already stored, `400` for an empty batch, more than 100 keys, repeated ids within the batch, or an upload that would exceed the stored limit, and `200` with the key status body on success. Structural checks run before signature verification. A client keeps the private keys of rotated signed and Kyber prekeys for at least 30 days after rotation, because a bundle fetched before the rotation can still be used for a message that arrives within the 30-day TTL.
 - The sender names the prekeys it used by id in its first message, and the recipient uses those ids to find the matching private keys. Because ids are never reused, a bundle fetched earlier can never point to a different key than the one the sender saw.
 
 **Decrypted plaintext structure** (never visible to the server):
@@ -1056,3 +1056,8 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 ## Appendix I: Changes from v1.7
 
 - The login checks are specified in order: structure, then challenge, then mailbox and signature. The identity key is taken from the stored mailbox, an unknown mailbox and an invalid signature are indistinguishable by response, and the unequalised response time is documented.
+
+## Appendix J: Changes from v1.8
+
+- Access token verification is specified: bearer presentation, `HS256` only, constant-time signature comparison, expiry check, and `401` without a body for any failure.
+- The key management endpoints get their status codes: `401` for authentication failures, `409` for ids that already exist, `400` for malformed batches and for uploads beyond the stored limit, `204` for a signed prekey replacement, and `200` with the key status body for a one-time prekey upload.
