@@ -6,6 +6,7 @@ import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.LoginService
 import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.RegistrationService
+import com.lnight.valence.server.domain.SendMessageService
 
 class ServerServices(
     val challenges: ChallengeService,
@@ -13,5 +14,6 @@ class ServerServices(
     val login: LoginService,
     val keys: KeyManagementService,
     val bundles: PreKeyBundleService,
+    val messages: SendMessageService,
     val tokenVerifier: AccessTokenVerifier,
 )
