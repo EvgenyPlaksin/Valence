@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.10 |
+| **Status** | Draft v1.11 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -366,6 +366,16 @@ Response `201`:
 ```
 
 An unknown mailbox and an invalid delivery key both return `401`, so mailbox existence cannot be probed. Oversized bodies return `413` and rate limiting returns `429` with `Retry-After`.
+
+**Send rules.** The server checks in this order:
+
+1. The body is read with a hard limit of 96 KiB (98,304 bytes), which leaves room for the Base64URL expansion of a 64 KiB envelope. A larger body returns `413` before any parsing, whether or not its length was declared.
+2. Malformed JSON, an unsupported version, or an envelope that is not valid Base64URL returns `400`.
+3. A missing or malformed delivery key, a wrong delivery key, and an unknown mailbox return the same `401` without a body.
+4. An empty envelope or a `ttlSeconds` below 1 returns `400`, and an envelope over 64 KiB (65,536 bytes) returns `413`.
+5. A mailbox that already holds 1,000 unexpired messages returns `429` with `Retry-After: 300`. Expired messages do not count toward the limit. A sender treats this like any other retryable failure.
+6. Otherwise the server stamps `serverTs`, assigns the next `serverSeq`, stores the envelope as received, and answers `201`.
+
 
 **Server → Client (WebSocket): `message.deliver`**
 
@@ -1069,3 +1079,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 
 - The bundle fetch rules are specified: delivery key authorisation without a token, indistinguishable `401` responses with equal hashing work, atomic consumption of the oldest one-time prekey only after the check passes, and signed and Kyber prekeys never consumed.
 - Open decision added: one-time prekey drain by holders of a delivery key.
+
+## Appendix L: Changes from v1.10
+
+- The send rules are specified in order: a 96 KiB body limit enforced before parsing, `400` for malformed bodies, the shared `401` for delivery key failures, `400` or `413` for envelope and TTL violations, and `429` with `Retry-After` when a mailbox holds 1,000 unexpired messages.
