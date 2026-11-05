@@ -8,10 +8,13 @@ import com.lnight.valence.server.crypto.JwtAccessTokenVerifier
 import com.lnight.valence.server.crypto.LibsignalPublicKeyVerifier
 import com.lnight.valence.server.crypto.SecureRandomBytes
 import com.lnight.valence.server.domain.ChallengeService
+import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
 import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.LoginService
+import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.RegistrationService
 import com.lnight.valence.server.routes.AuthTokenRequestMapper
+import com.lnight.valence.server.routes.PreKeyBundleResponseMapper
 import com.lnight.valence.server.routes.RegisterRequestMapper
 import com.lnight.valence.server.routes.ReplaceSignedPreKeysRequestMapper
 import com.lnight.valence.server.routes.UploadOneTimePreKeysRequestMapper
@@ -19,6 +22,7 @@ import com.lnight.valence.server.routes.accessToken
 import com.lnight.valence.server.routes.authRoutes
 import com.lnight.valence.server.routes.keyRoutes
 import com.lnight.valence.server.routes.loginRoutes
+import com.lnight.valence.server.routes.preKeyRoutes
 import com.lnight.valence.server.routes.registrationRoutes
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import io.ktor.serialization.kotlinx.json.json
@@ -59,6 +63,7 @@ private fun createServices(): ServerServices {
         registration = RegistrationService(challenges, keyVerifier, store, tokens, clock),
         login = LoginService(challenges, keyVerifier, store, tokens),
         keys = KeyManagementService(keyVerifier, store),
+        bundles = PreKeyBundleService(DeliveryKeyAuthenticator(store), store),
         tokenVerifier = JwtAccessTokenVerifier(clock, tokenKey),
     )
 }
@@ -78,5 +83,6 @@ fun Application.module(services: ServerServices) {
         registrationRoutes(services.registration, RegisterRequestMapper())
         loginRoutes(services.login, AuthTokenRequestMapper())
         keyRoutes(services.keys, ReplaceSignedPreKeysRequestMapper(), UploadOneTimePreKeysRequestMapper())
+        preKeyRoutes(services.bundles, PreKeyBundleResponseMapper())
     }
 }
