@@ -4,6 +4,7 @@ import com.lnight.valence.server.domain.KeyStoreOutcome
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.MailboxStore
 import com.lnight.valence.server.domain.OneTimePreKey
+import com.lnight.valence.server.domain.PreKeyBundle
 import com.lnight.valence.server.domain.SignedPublicKey
 import java.util.concurrent.ConcurrentHashMap
 
@@ -46,6 +47,22 @@ class InMemoryMailboxStore : MailboxStore {
                 else -> Change(StoredMailbox(stored.mailbox, stored.oneTimePreKeys + keys), KeyStoreOutcome.UPDATED)
             }
         }
+
+    override fun takeBundle(mailboxId: String): PreKeyBundle? {
+        var bundle: PreKeyBundle? = null
+        mailboxes.computeIfPresent(mailboxId) { _, stored ->
+            val mailbox = stored.mailbox
+            bundle =
+                PreKeyBundle(
+                    identityKey = mailbox.identityKey,
+                    signedPreKey = mailbox.signedPreKey,
+                    kyberPreKey = mailbox.kyberPreKey,
+                    oneTimePreKey = stored.oneTimePreKeys.firstOrNull(),
+                )
+            StoredMailbox(mailbox, stored.oneTimePreKeys.drop(1))
+        }
+        return bundle
+    }
 
     private fun update(
         mailboxId: String,
