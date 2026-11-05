@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.9 |
+| **Status** | Draft v1.10 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -423,6 +423,8 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 ```
 
 `oneTimePreKey` is absent when the mailbox's one-time prekeys are exhausted.
+
+**Bundle fetch rules.** The request carries the recipient's delivery key in `X-Delivery-Key` (Base64URL) and no token. The server hashes the presented key with SHA-256 and compares the result in constant time with the stored hash. A missing or malformed header, a wrong delivery key, an unknown mailbox, and a malformed mailbox ID all return the same `401` without a body, and the server does the same hashing work whether or not the mailbox exists. Only after the check passes does the server read the bundle and consume one one-time prekey, the oldest stored one, in a single atomic step. A failed check never consumes a prekey. The signed and Kyber prekeys are returned unchanged and are never consumed.
 
 **Sender certificate** (`GET /v1/sender-certificate`, JWT-authenticated)
 
@@ -970,6 +972,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Inbox store | PostgreSQL vs. Redis Streams | PostgreSQL for durability; Redis for fan-out signalling only |
 | Attachments | Encrypted blob store with client-held keys | Separate spec; the message plaintext carries only the blob reference and key |
 | Registration abuse control | How to limit mass registration | Per-IP rate limits first. Proof-of-work can be added later because the challenge format can carry a puzzle. |
+| One-time prekey drain | A holder of a delivery key can exhaust a mailbox's one-time prekeys by fetching bundles repeatedly | A per-recipient rate limit on bundle fetches (see 4.1). The bundle degrades gracefully to the signed and Kyber prekeys when the one-time prekeys run out. |
 | Unknown frame types | Ignore vs. close the connection when a frame `type` is not recognised | Clients ignore unknown server frame types, and the server answers an unknown client frame type with an `error` frame. Not implemented yet: decoding currently fails on an unknown `type`. |
 | Plaintext structure location | `protocol/` vs. a client-only module | Keep the definition and golden fixtures in `protocol/`, and expose it to `:core:data` through a codec interface in `:core:model` that `:core:network` implements, so rule 6 of section 2.3 still holds. |
 
@@ -1061,3 +1064,8 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 
 - Access token verification is specified: bearer presentation, `HS256` only, constant-time signature comparison, expiry check, and `401` without a body for any failure.
 - The key management endpoints get their status codes: `401` for authentication failures, `409` for ids that already exist, `400` for malformed batches and for uploads beyond the stored limit, `204` for a signed prekey replacement, and `200` with the key status body for a one-time prekey upload.
+
+## Appendix K: Changes from v1.9
+
+- The bundle fetch rules are specified: delivery key authorisation without a token, indistinguishable `401` responses with equal hashing work, atomic consumption of the oldest one-time prekey only after the check passes, and signed and Kyber prekeys never consumed.
+- Open decision added: one-time prekey drain by holders of a delivery key.

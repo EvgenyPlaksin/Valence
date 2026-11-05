@@ -1,8 +1,10 @@
 package com.lnight.valence.server
 
 import com.lnight.valence.server.domain.AccessTokenVerifier
+import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
 import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.MailboxStore
+import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.PublicKeyVerifier
 import com.lnight.valence.server.store.InMemoryMailboxStore
 
@@ -25,6 +27,7 @@ internal object TestServices {
             registration = RegistrationTestSupport.service(verifier, store, atMillis),
             login = LoginTestSupport.service(verifier, store, atMillis),
             keys = KeyManagementService(verifier, store),
+            bundles = PreKeyBundleService(DeliveryKeyAuthenticator(store), store),
             tokenVerifier = FakeAccessTokens.verifier,
         )
 }
