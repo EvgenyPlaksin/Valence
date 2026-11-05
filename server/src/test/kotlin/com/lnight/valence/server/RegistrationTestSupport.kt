@@ -68,13 +68,16 @@ internal object RegistrationTestSupport {
             proof = Base64Url.encode(validProof),
         )
 
-    fun mailbox(identityKey: ByteArray = ByteArray(33) { 4 }): Mailbox =
+    fun mailbox(
+        identityKey: ByteArray = ByteArray(33) { 4 },
+        deliveryKeyHash: ByteArray = ByteArray(32) { 9 },
+    ): Mailbox =
         Mailbox(
             id = MAILBOX_ID,
             identityKey = identityKey,
             signedPreKey = SignedPublicKey(1, ByteArray(33) { 5 }, signedPreKeySignature),
             kyberPreKey = SignedPublicKey(1, ByteArray(1569) { 6 }, kyberPreKeySignature),
-            deliveryKeyHash = ByteArray(32) { 9 },
+            deliveryKeyHash = deliveryKeyHash,
             createdAtMillis = 0L,
         )
 

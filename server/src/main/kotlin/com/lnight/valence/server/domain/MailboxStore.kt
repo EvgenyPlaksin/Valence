@@ -21,4 +21,6 @@ interface MailboxStore {
         keys: List<OneTimePreKey>,
         maxStored: Int,
     ): KeyStoreOutcome
+
+    fun takeBundle(mailboxId: String): PreKeyBundle?
 }
