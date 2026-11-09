@@ -40,4 +40,11 @@ class FrameContractTest {
 
         assertEquals(884_200L, assertIs<SyncResumeFrame>(frame).afterServerSeq)
     }
+
+    @Test
+    fun `invalid frame error matches its fixture`() {
+        val frame = assertIs<ErrorFrame>(ContractAssertions.roundTrip("error-invalid-frame", ServerFrame.serializer()))
+
+        assertEquals(ErrorCode.INVALID_FRAME, frame.code)
+    }
 }

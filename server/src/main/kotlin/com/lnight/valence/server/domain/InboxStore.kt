@@ -10,5 +10,12 @@ interface InboxStore {
     fun messagesAfter(
         mailboxId: String,
         afterServerSeq: Long,
+        nowMillis: Long = 0L,
+        limit: Int = Int.MAX_VALUE,
     ): List<QueuedMessage>
+
+    fun deleteUpTo(
+        mailboxId: String,
+        upToServerSeq: Long,
+    )
 }

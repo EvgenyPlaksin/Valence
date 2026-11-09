@@ -5,8 +5,10 @@ import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
 import com.lnight.valence.server.domain.InboxStore
 import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.MailboxStore
+import com.lnight.valence.server.domain.MailboxSubscriptions
 import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.PublicKeyVerifier
+import com.lnight.valence.server.domain.ReceiveService
 import com.lnight.valence.server.domain.SendMessageService
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
@@ -28,19 +30,19 @@ internal object TestServices {
         store: MailboxStore = InMemoryMailboxStore(),
         inbox: InboxStore = InMemoryInboxStore(),
         atMillis: Long = ChallengeTestSupport.ISSUED_AT_MILLIS,
-    ): ServerServices =
-        ServerServices(
+    ): ServerServices {
+        val clock = Clock.fixed(Instant.ofEpochMilli(atMillis), ZoneOffset.UTC)
+        val subscriptions = MailboxSubscriptions()
+        return ServerServices(
             challenges = ChallengeTestSupport.service(atMillis),
             registration = RegistrationTestSupport.service(verifier, store, atMillis),
             login = LoginTestSupport.service(verifier, store, atMillis),
             keys = KeyManagementService(verifier, store),
             bundles = PreKeyBundleService(DeliveryKeyAuthenticator(store), store),
-            messages =
-                SendMessageService(
-                    DeliveryKeyAuthenticator(store),
-                    inbox,
-                    Clock.fixed(Instant.ofEpochMilli(atMillis), ZoneOffset.UTC),
-                ),
+            messages = SendMessageService(DeliveryKeyAuthenticator(store), inbox, subscriptions, clock),
+            receive = ReceiveService(inbox, clock),
+            subscriptions = subscriptions,
             tokenVerifier = FakeAccessTokens.verifier,
         )
+    }
 }
