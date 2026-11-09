@@ -10,4 +10,5 @@ object ProtocolRoutes {
     const val KEYS_STATUS = "/v1/keys/status"
     const val KEYS_SIGNED = "/v1/keys/signed"
     const val KEYS_ONE_TIME = "/v1/keys/one-time"
+    const val SOCKET = "/v1/socket"
 }

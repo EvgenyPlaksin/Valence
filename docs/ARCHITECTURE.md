@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.11 |
+| **Status** | Draft v1.12 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -420,6 +420,8 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 }
 ```
 
+**Socket rules.** The WebSocket endpoint is `/v1/socket`. The client presents its access token as `Authorization: Bearer <token>` on the upgrade request, and a missing, invalid, or expired token returns `401` without an upgrade. The server sends nothing until the client has sent `sync.resume`. Each of these is answered with an `error` frame with code `INVALID_FRAME`, and the connection stays open: a second `sync.resume`, text that is not valid JSON, a frame with an unknown `type` or an unsupported version, a binary frame, and a `delivery.confirm` before `sync.resume`. A client frame larger than 4 KiB closes the connection with code 1009. When a newer connection for the same mailbox opens, the server closes the older one with code 4000. The server pings every 20 seconds and closes a connection that has not answered for 40 seconds. Messages whose TTL has passed are never delivered.
+
 **Prekey bundle** (`GET /v1/prekeys/{mailboxId}`, header `X-Delivery-Key`)
 
 ```json
@@ -532,7 +534,7 @@ The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/
 - `serverSeq` is a 64-bit integer assigned by the server when it enqueues a message. It is strictly increasing per mailbox, starts at 1, and is never reused. Gaps are possible, for example after the TTL deleted messages.
 - `upToServerSeq` in `delivery.confirm` is inclusive and cumulative. The client states that it has durably stored every message with `serverSeq` less than or equal to N, and the server may delete all of them. Repeating a confirmation, or sending a lower value than before, has no effect.
 - `afterServerSeq` in `sync.resume` is exclusive. The client sends the highest `serverSeq` it has confirmed, or 0 on the first connection, and the server replays every stored message with a greater `serverSeq` in ascending order.
-- `code` in `error` is machine-readable. v1 defines only `RATE_LIMITED`. A client treats any code it does not know as unknown. `retryAfterMs` is the wait before retrying, in milliseconds. The HTTP equivalent is the `Retry-After` header, which counts in seconds.
+- `code` in `error` is machine-readable. v1 defines `RATE_LIMITED` and `INVALID_FRAME`. A client treats any code it does not know as unknown. `retryAfterMs` is the wait before retrying, in milliseconds. The HTTP equivalent is the `Retry-After` header, which counts in seconds.
 
 **Keys and prekey ids.**
 
@@ -776,28 +778,22 @@ sealed interface UnsealResult {
 
 ### 4.1 Ktor Backend: Connection Pool
 
-**Connection registry.** Each node holds a `ConcurrentHashMap<MailboxId, ConnectionHandle>`. One mailbox maps to at most one active handle per device slot; a newer connection supersedes and closes the older one.
+**Subscriptions.** Each node holds a `ConcurrentHashMap<MailboxId, Subscription>`. A mailbox has at most one active subscription, and a newer connection supersedes the older one, which the server closes with code 4000. A subscription is a conflated wake-up signal plus a superseded marker. It carries no messages.
 
-```kotlin
-class ConnectionHandle(
-    val mailboxId: MailboxId,
-    val session: DefaultWebSocketServerSession,
-    val outbound: Channel<OutboundFrame> = Channel(capacity = 256, onBufferOverflow = BufferOverflow.SUSPEND)
-)
-```
+**Per-connection coroutines.** Each connection runs a reader and a pump inside one scope tied to the session:
 
-**Per-connection actor model.** Each connection runs exactly two coroutines inside a `supervisorScope` tied to the session:
+1. **Reader** consumes control frames from `incoming` (`delivery.confirm`, `sync.resume`), validates frame size and schema, and answers an invalid frame with an `error` frame. A client frame over 4 KiB closes the connection with code 1009.
+2. **Pump** waits for the subscription's wake-up signal, reads the next batch of up to 100 unexpired messages after its cursor from the inbox, and writes `message.deliver` frames in order. It repeats until a read returns nothing. Delivery is driven by the store and not by pushed copies of messages, so order, the absence of duplicates, and the absence of gaps follow from the cursor.
 
-1. **Reader** consumes control frames from `incoming` (`delivery.confirm`, `sync.resume`, pings), validates frame size and schema, applies the rate limiter, and dispatches to the router. It never touches the socket write side.
-2. **Writer** drains `outbound` and is the sole writer to the socket. This removes write contention and gives natural backpressure: a slow client fills its own channel and affects no other connection.
+Backpressure is natural. A slow client suspends only its own pump, while its messages wait in the persisted inbox, bounded by the per-mailbox quota. A sender's request never waits for a connection.
 
 **Delivery path.**
 
 ```
 POST /v1/messages/{to} ─► verify delivery key ─► validate ─► InboxStore.append(to, envelope) ─► assign serverSeq ─► 201 to sender
                                                                        │
-                                                                       └─► Registry.lookup(to)
-                                                                                ├─ local handle ─► outbound.trySend(deliver)
+                                                                       └─► Subscriptions.notify(to)
+                                                                                ├─ local subscription ─► wake-up signal (conflated)
                                                                                 └─ remote node  ─► Redis Pub/Sub / Streams notify
 ```
 
@@ -807,7 +803,7 @@ The append to durable storage **precedes** any live delivery. Live push is an op
 
 | Concern | Policy |
 |---|---|
-| Slow consumer | `outbound` full for more than 5 s: close with code 1013, client resumes from cursor |
+| Slow consumer | A slow client suspends only its own pump, and its messages stay in the inbox. A connection that stops answering pings is closed after 40 s |
 | Body size | Hard cap 64 KiB for envelopes, enforced before deserialisation |
 | Rate limiting | Anonymous sends: token bucket per recipient mailbox (sustained 20 msg/s, burst 60) plus a per-IP limit. Authenticated endpoints: token bucket per mailbox |
 | Idle detection | Ping every 20 s, close after 2 missed pongs |
@@ -816,7 +812,7 @@ The append to durable storage **precedes** any live delivery. Live push is an op
 
 **Horizontal scale.** Nodes are stateless apart from the in-memory registry. Cross-node delivery uses a Redis Pub/Sub channel per mailbox shard (`mbx:{hash mod N}`). If no node holds the recipient, the message simply remains in the inbox and is delivered on next connect. Push notification (FCM) carries **no content**: a data-only wake-up that tells the client to open the socket.
 
-**Resume protocol.** On connect the client sends `sync.resume { afterServerSeq }`. The server streams the backlog in ordered batches, then switches to live mode. Messages arriving during backlog replay are buffered in the same `outbound` channel to preserve order.
+**Resume protocol.** On connect the client sends `sync.resume { afterServerSeq }`. Until then the server pushes nothing. The server then replays the inbox in ordered batches of up to 100 and keeps delivering new messages through the same pump, so a message that arrives during replay is read in order by the next read. A second `sync.resume` on the same connection is an invalid frame. A `delivery.confirm` is clamped to the highest sequence number the server has sent on the connection, so a client cannot delete messages it has not been sent.
 
 **Persistence concurrency.** `InboxStore.append` uses a per-mailbox sequence (`INSERT ... RETURNING` against a counter row, or a Redis `INCR`) so `serverSeq` is strictly monotonic per mailbox. Database access runs on a bounded `Dispatchers.IO.limitedParallelism(n)` view sized to the connection pool, preventing thread starvation under burst.
 
@@ -983,7 +979,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Attachments | Encrypted blob store with client-held keys | Separate spec; the message plaintext carries only the blob reference and key |
 | Registration abuse control | How to limit mass registration | Per-IP rate limits first. Proof-of-work can be added later because the challenge format can carry a puzzle. |
 | One-time prekey drain | A holder of a delivery key can exhaust a mailbox's one-time prekeys by fetching bundles repeatedly | A per-recipient rate limit on bundle fetches (see 4.1). The bundle degrades gracefully to the signed and Kyber prekeys when the one-time prekeys run out. |
-| Unknown frame types | Ignore vs. close the connection when a frame `type` is not recognised | Clients ignore unknown server frame types, and the server answers an unknown client frame type with an `error` frame. Not implemented yet: decoding currently fails on an unknown `type`. |
+| Unknown frame types | Ignore vs. close the connection when a frame `type` is not recognised | The server answers an unknown or invalid client frame with an `error` frame (`INVALID_FRAME`), which is implemented. Clients ignore unknown server frame types, which is not implemented yet: decoding currently fails on an unknown `type`. |
 | Plaintext structure location | `protocol/` vs. a client-only module | Keep the definition and golden fixtures in `protocol/`, and expose it to `:core:data` through a codec interface in `:core:model` that `:core:network` implements, so rule 6 of section 2.3 still holds. |
 
 ---
@@ -1083,3 +1079,10 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 ## Appendix L: Changes from v1.10
 
 - The send rules are specified in order: a 96 KiB body limit enforced before parsing, `400` for malformed bodies, the shared `401` for delivery key failures, `400` or `413` for envelope and TTL violations, and `429` with `Retry-After` when a mailbox holds 1,000 unexpired messages.
+
+## Appendix M: Changes from v1.11
+
+- The receive socket is specified: path, bearer presentation, the rule that nothing is pushed before `sync.resume`, invalid frames answered with `INVALID_FRAME`, the 4 KiB client frame limit, close codes 1009 and 4000, and ping and idle timeouts.
+- Section 4.1 replaces the per-connection outbound channel, its capacity, and the 5 second overflow rule with a pull design: a conflated wake-up signal per connection and a pump that reads batches from the inbox after its cursor. Order, duplicates, and gaps follow from the cursor, and the sender never waits for a connection.
+- `delivery.confirm` is clamped to the highest sequence number sent on the connection.
+- The error code `INVALID_FRAME` is added.
