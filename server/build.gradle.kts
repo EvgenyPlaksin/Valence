@@ -38,7 +38,7 @@ dependencies {
     implementation("io.ktor:ktor-server-websockets:3.6.1")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.1")
 
-    implementation("org.signal:libsignal-server:0.106.1")
+    implementation("org.signal:libsignal-server:0.106.2")
 
     implementation("ch.qos.logback:logback-classic:1.6.6")
 
