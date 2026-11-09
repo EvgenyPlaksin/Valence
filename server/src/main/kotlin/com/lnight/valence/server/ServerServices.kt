@@ -4,7 +4,9 @@ import com.lnight.valence.server.domain.AccessTokenVerifier
 import com.lnight.valence.server.domain.ChallengeService
 import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.LoginService
+import com.lnight.valence.server.domain.MailboxSubscriptions
 import com.lnight.valence.server.domain.PreKeyBundleService
+import com.lnight.valence.server.domain.ReceiveService
 import com.lnight.valence.server.domain.RegistrationService
 import com.lnight.valence.server.domain.SendMessageService
 
@@ -15,5 +17,7 @@ class ServerServices(
     val keys: KeyManagementService,
     val bundles: PreKeyBundleService,
     val messages: SendMessageService,
+    val receive: ReceiveService,
+    val subscriptions: MailboxSubscriptions,
     val tokenVerifier: AccessTokenVerifier,
 )

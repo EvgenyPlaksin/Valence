@@ -1,6 +1,7 @@
 package com.lnight.valence.server
 
 import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
+import com.lnight.valence.server.domain.MessageNotifier
 import com.lnight.valence.server.domain.NewMessage
 import com.lnight.valence.server.domain.SendMessageService
 import com.lnight.valence.server.domain.SendRejection
@@ -21,10 +22,12 @@ class SendMessageServiceTest {
     private val thirtyDaysMillis = 2_592_000_000L
     private val mailboxes = InMemoryMailboxStore().also { it.create(DeliveryKeyTestSupport.mailbox(), emptyList()) }
     private val inbox = InMemoryInboxStore()
+    private val notified = mutableListOf<String>()
     private val service =
         SendMessageService(
             DeliveryKeyAuthenticator(mailboxes),
             inbox,
+            MessageNotifier { mailboxId -> notified += mailboxId },
             Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC),
         )
 
@@ -101,5 +104,21 @@ class SendMessageServiceTest {
         send()
 
         assertEquals(listOf(1L, 2L), stored().map { it.serverSeq })
+    }
+
+    @Test
+    fun `an accepted message notifies its mailbox once`() {
+        send()
+
+        assertEquals(listOf(id), notified)
+    }
+
+    @Test
+    fun `rejected messages notify nobody`() {
+        send(ttl = 0L)
+        send(deliveryKey = ByteArray(16) { 4 })
+        send(envelope = ByteArray(65_537))
+
+        assertTrue(notified.isEmpty())
     }
 }

@@ -31,14 +31,25 @@ class InMemoryInboxStore : InboxStore {
     override fun messagesAfter(
         mailboxId: String,
         afterServerSeq: Long,
+        nowMillis: Long,
+        limit: Int,
     ): List<QueuedMessage> {
         val queue = queues[mailboxId]
-        return if (queue ==
-            null
-        ) {
+        return if (queue == null) {
             emptyList()
         } else {
-            synchronized(queue) { queue.messages.filter { it.serverSeq > afterServerSeq } }
+            synchronized(queue) {
+                queue.messages.filter { it.serverSeq > afterServerSeq && it.expiresAtMillis > nowMillis }.take(limit)
+            }
+        }
+    }
+
+    override fun deleteUpTo(
+        mailboxId: String,
+        upToServerSeq: Long,
+    ) {
+        queues[mailboxId]?.let { queue ->
+            synchronized(queue) { queue.messages.removeAll { it.serverSeq <= upToServerSeq } }
         }
     }
 
