@@ -5,5 +5,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 enum class ErrorCode {
     RATE_LIMITED,
+    INVALID_FRAME,
     UNKNOWN,
 }

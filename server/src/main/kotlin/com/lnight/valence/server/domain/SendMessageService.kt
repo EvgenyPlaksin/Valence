@@ -6,6 +6,7 @@ import java.time.Duration
 class SendMessageService(
     private val authenticator: DeliveryKeyAuthenticator,
     private val inbox: InboxStore,
+    private val notifier: MessageNotifier,
     private val clock: Clock,
 ) {
     fun send(
@@ -48,8 +49,14 @@ class SendMessageService(
         val ttl = minOf(ttlSeconds ?: MessageLimits.MAX_TTL_SECONDS, MessageLimits.MAX_TTL_SECONDS)
         val message = NewMessage(envelope, now, now + Duration.ofSeconds(ttl).toMillis())
         return when (inbox.append(mailboxId, message, MessageLimits.MAX_QUEUED_PER_MAILBOX)) {
-            is AppendResult.Appended -> SendResult.Accepted(now)
-            AppendResult.QuotaExceeded -> SendResult.Rejected(SendRejection.QUOTA_EXCEEDED)
+            is AppendResult.Appended -> {
+                notifier.messageStored(mailboxId)
+                SendResult.Accepted(now)
+            }
+
+            AppendResult.QuotaExceeded -> {
+                SendResult.Rejected(SendRejection.QUOTA_EXCEEDED)
+            }
         }
     }
 }
