@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.12 |
+| **Status** | Draft v1.13 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -154,6 +154,9 @@ The server is restricted to the following operations on message traffic:
 
 **Sender certificates.** A mailbox obtains a certificate with `GET /v1/sender-certificate` (JWT-authenticated). The certificate binds the mailbox ID and the identity key, expires after 24 hours, and is signed by a server certificate key chained to a trust root whose public key is pinned in the client. Recipients reject envelopes whose certificate is missing, expired, invalidly signed, or whose identity key does not match the session.
 
+**Certificate format and keys.** A sender certificate is libsignal's `SenderCertificate`. Its sender identifier is the UUID form of the mailbox ID, its device id is the fixed value 1 in v1, its identity key is the key stored for the mailbox, and its expiry is 24 hours after issue in Unix milliseconds. The chain has three levels: a trust root key pair, a server certificate, and the sender certificates. The trust root private key is kept offline and never reaches the server. It signs one server certificate, which carries a key id and the server's certificate signing public key. The server holds only the serialised server certificate and the signing private key, configured as `VALENCE_SERVER_CERTIFICATE` and `VALENCE_CERTIFICATE_KEY`, and it signs every sender certificate with that key. The server refuses to start if the signing key does not match the key inside the server certificate. The client pins the trust root public key. A new server signing key needs only a new server certificate signed offline by the trust root, with no app update. Replacing the trust root requires an app update. `GET /v1/sender-certificate` answers `200` with `{ v, certificate, expiresAt }`, and `401` when the token is missing, invalid, or expired or when its mailbox no longer exists.
+
+
 **Anonymous sends.** Sending over the authenticated socket would identify the sender through its JWT, so sends never use it. A send is `POST /v1/messages/{to}` with the recipient's delivery key in `X-Delivery-Key`, over a connection carrying no account credential. The server compares the SHA-256 of the presented key with the stored hash in constant time. The recipient generates the delivery key, registers its hash, and gives the key to contacts in the invite link or QR code. On rotation, the new key is sent to each contact in an ordinary encrypted message. This is modelled on Signal's unidentified-access key. A leaked delivery key lets third parties enqueue messages up to the quotas, but never read anything, and rotation invalidates it. Prekey fetches use the same mechanism.
 
 ### 1.7 Threat Model: What the Server Can Observe
@@ -176,7 +179,7 @@ Out of scope for v1: traffic-analysis resistance against a global passive advers
 
 ### 1.8 Key Verification
 
-Users verify a contact by comparing a **safety number** produced by libsignal's numeric fingerprint generator, rendered as 60 digits or a QR code. The generator defines the canonical ordering of the two identities and the hash iteration, so both sides compute the same value. A changed identity key raises a blocking trust-change event in the conversation layer rather than silently re-keying.
+Users verify a contact by comparing a **safety number** produced by libsignal's numeric fingerprint generator, rendered as 60 digits or a QR code. The generator defines the canonical ordering of the two identities and the hash iteration, so both sides compute the same value. A changed identity key raises a blocking trust-change event in the conversation layer rather than silently re-keying. The server never computes or sees safety numbers. Each device derives them from the two identity keys, and the comparison between the users is what detects a server that hands out a different identity key.
 
 ---
 
@@ -326,7 +329,7 @@ The server is one Gradle module organised in four layers. Each layer is a packag
 | `routes` | Ktor routing and WebSocket handlers. They map `protocol` DTOs to domain types and call the domain. No business rules. | Ktor, `protocol`, `domain` |
 | `domain` | Business rules and the ports they need: mailbox lookup, delivery key verification, TTL, sequencing, rate limits. Framework-free. | Kotlin, kotlinx.coroutines, `java.time`, `java.nio.ByteBuffer`, `java.security.MessageDigest`, `protocol`'s `SignedMessages`, its own package |
 | `store` | Persistence adapters that implement domain ports | `domain`, database libraries |
-| `crypto` | The only package that may use libsignal, for signature verification and sender certificates. It also implements challenge MACs and access token signing. | `domain`, libsignal |
+| `crypto` | The only package that may use libsignal, for signature verification and sender certificates. It also implements challenge MACs and access token signing. | `domain`, libsignal, pure helpers of `protocol` |
 
 `Application.kt` is the composition root and wires the layers together. `routes` never imports `store`, and `store` never imports Ktor or `routes`. The `domain` package never imports `protocol` DTOs, which mirrors the client rule that only the network layer sees them. The one exception is `SignedMessages`, a pure function that defines the signed byte layouts, so that layout exists once and is covered by golden vectors.
 
@@ -542,7 +545,7 @@ The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/
 - A prekey `id` is assigned by the client that owns the key, at the moment it generates the key. Ids come from a counter that is persisted per key kind and never reused. An id is a positive 32-bit integer (1 to 2,147,483,647).
 - Signed, Kyber, and one-time prekeys have separate id namespaces. Id 3 can exist as a signed prekey, a Kyber prekey, and a one-time prekey at the same time. The client and server schemas (3.2, 4.3) already store each kind separately.
 - The server treats an id as an opaque label. It stores the id with the key and returns it unchanged. An upload that repeats an id of the same kind in the same mailbox is rejected.
-- `challenge` is an opaque Base64URL string. `deliveryKeyHash` is the Base64URL SHA-256 of the delivery key. A mailbox ID is `mbx_` followed by 26 lowercase base32 characters (`a` to `z` and `2` to `7`). Registration carries 1 to 100 one-time prekeys with unique positive ids.
+- `challenge` is an opaque Base64URL string. `deliveryKeyHash` is the Base64URL SHA-256 of the delivery key. A mailbox ID is `mbx_` followed by 26 lowercase base32 characters (`a` to `z` and `2` to `7`) that encode exactly 128 bits, so the last character is one of `a`, `e`, `i`, `m`, `q`, `u`, `y`, or `4`. The same 128 bits have a UUID form, the 16 bytes written as a UUID, which is the sender identifier inside sender certificates. Registration carries 1 to 100 one-time prekeys with unique positive ids.
 - `accessToken` is a JWT. Its `expiresAt` in the body is in milliseconds, while the `iat` and `exp` claims inside the JWT are in seconds.
 - Key management rules. The server verifies every `sig` under the mailbox's stored identity key and answers `400` for an invalid signature. `PUT /v1/keys/signed` replaces the signed and Kyber prekeys together and atomically. `POST /v1/keys/one-time` accepts 1 to 100 keys and answers `400` if the upload would leave more than 200 one-time prekeys stored. An id that already exists for the same kind returns `409`. The authenticated key endpoints answer `401` when the token is missing, invalid, or expired, or when its mailbox no longer exists. `PUT /v1/keys/signed` answers `409` if either new id equals the id currently stored for that kind, and `204` on success. `POST /v1/keys/one-time` answers `409` if any id is already stored, `400` for an empty batch, more than 100 keys, repeated ids within the batch, or an upload that would exceed the stored limit, and `200` with the key status body on success. Structural checks run before signature verification. A client keeps the private keys of rotated signed and Kyber prekeys for at least 30 days after rotation, because a bundle fetched before the rotation can still be used for a message that arrives within the 30-day TTL.
 - The sender names the prekeys it used by id in its first message, and the recipient uses those ids to find the matching private keys. Because ids are never reused, a bundle fetched earlier can never point to a different key than the one the sender saw.
@@ -971,7 +974,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Project licence | AGPL-3.0 vs. other | **Decided: AGPL-3.0.** libsignal is AGPL-3.0, so the combined work must be distributed under a compatible licence. |
 | Unseal API split | Pinned libsignal exposes unsealing separately from session decryption, or it does not | Verify when the dependency is added. If not, run K = 1 or add a thin adapter (see 4.3). |
 | Kyber prekeys | Last-resort only (v1) vs. one-time plus last-resort | Last-resort only in v1; add one-time Kyber prekeys before any public release. |
-| Certificate trust root | Where the pinned trust root comes from and how it rotates | Ship the public key in the app; rotation through an app update. Specify before server work on certificates. |
+| Certificate trust root | Where the pinned trust root comes from and how it rotates | **Decided.** The trust root key pair is generated offline. The public key is shipped in the app and the private key never reaches the server. The server holds a server certificate signed by the trust root and the matching signing key (see 1.6). Rotating the server key needs no app update, and rotating the trust root needs an app update. |
 | Delivery key rotation | How a leaked key is replaced and redistributed | Rotation sends the new key to every contact in an encrypted message. Specify the retry behaviour for contacts that are offline. |
 | Multi-device | Per-device sessions (Signal model) vs. single device | Single device in v1 (a fixed device id); schema keyed by `contact_id` extends to `(contact_id, device_id)` |
 | Group messaging | Pairwise fan-out vs. sender keys | Out of scope for v1; libsignal provides sender keys for a later version |
@@ -1086,3 +1089,10 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - Section 4.1 replaces the per-connection outbound channel, its capacity, and the 5 second overflow rule with a pull design: a conflated wake-up signal per connection and a pump that reads batches from the inbox after its cursor. Order, duplicates, and gaps follow from the cursor, and the sender never waits for a connection.
 - `delivery.confirm` is clamped to the highest sequence number sent on the connection.
 - The error code `INVALID_FRAME` is added.
+
+## Appendix N: Changes from v1.12
+
+- The sender certificate is specified: libsignal's format, the UUID form of the mailbox ID as sender identifier, device id 1, a 24 hour expiry, the three level chain from an offline trust root through a server certificate, the two configuration variables, the startup consistency check, and the rotation rules. The trust root decision is closed.
+- The mailbox ID is canonical: its last character encodes two zero padding bits, so every mailbox ID maps to exactly one UUID and back.
+- The server `crypto` layer may use pure helpers of `protocol`.
+- The safety number section states that the server never computes or sees safety numbers.
