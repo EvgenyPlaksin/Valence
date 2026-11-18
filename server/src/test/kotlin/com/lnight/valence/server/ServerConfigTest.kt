@@ -40,4 +40,24 @@ class ServerConfigTest {
 
         assertFailsWith<IllegalStateException> { ServerConfig.tokenKey(environment) }
     }
+
+    @Test
+    fun `the certificate configuration is decoded from the environment`() {
+        val certificate = ByteArray(40) { it.toByte() }
+        val key = ByteArray(32) { (it + 5).toByte() }
+        val environment =
+            mapOf(
+                ServerConfig.SERVER_CERTIFICATE_VARIABLE to Base64Url.encode(certificate),
+                ServerConfig.CERTIFICATE_KEY_VARIABLE to Base64Url.encode(key),
+            )
+
+        assertContentEquals(certificate, ServerConfig.serverCertificate(environment))
+        assertContentEquals(key, ServerConfig.certificateKey(environment))
+    }
+
+    @Test
+    fun `missing certificate configuration fails fast`() {
+        assertFailsWith<IllegalStateException> { ServerConfig.serverCertificate(emptyMap()) }
+        assertFailsWith<IllegalStateException> { ServerConfig.certificateKey(emptyMap()) }
+    }
 }
