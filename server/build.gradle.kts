@@ -2,7 +2,7 @@ plugins {
     kotlin("jvm") version "2.4.21"
     kotlin("plugin.serialization") version "2.4.21"
     application
-    id("com.diffplug.spotless") version "8.10.4"
+    id("com.diffplug.spotless") version "8.11.0"
     id("dev.detekt") version "2.0.0-alpha.6"
 }
 
@@ -38,8 +38,8 @@ dependencies {
     implementation("io.ktor:ktor-server-websockets:3.6.1")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.1")
 
-    implementation("org.signal:libsignal-server:0.106.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.11.0")
+    implementation("org.signal:libsignal-server:0.106.2")
 
     implementation("ch.qos.logback:logback-classic:1.6.6")
 
