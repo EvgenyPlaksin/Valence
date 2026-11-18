@@ -38,6 +38,7 @@ dependencies {
     implementation("io.ktor:ktor-server-websockets:3.6.1")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.1")
 
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.11.0")
     implementation("org.signal:libsignal-server:0.106.2")
 
     implementation("ch.qos.logback:logback-classic:1.6.6")
@@ -105,4 +106,11 @@ tasks.register("checkDependencies") {
 
 tasks.check {
     dependsOn("spotlessCheck", "detekt", "checkDependencies")
+}
+
+tasks.register<JavaExec>("generateCertificateKeys") {
+    group = "tools"
+    description = "Generates a trust root, a server certificate and a signing key for sender certificates"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.lnight.valence.server.crypto.CertificateKeyToolKt")
 }

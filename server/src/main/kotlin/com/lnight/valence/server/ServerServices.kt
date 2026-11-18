@@ -9,6 +9,7 @@ import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.ReceiveService
 import com.lnight.valence.server.domain.RegistrationService
 import com.lnight.valence.server.domain.SendMessageService
+import com.lnight.valence.server.domain.SenderCertificateService
 
 class ServerServices(
     val challenges: ChallengeService,
@@ -19,5 +20,6 @@ class ServerServices(
     val messages: SendMessageService,
     val receive: ReceiveService,
     val subscriptions: MailboxSubscriptions,
+    val certificates: SenderCertificateService,
     val tokenVerifier: AccessTokenVerifier,
 )

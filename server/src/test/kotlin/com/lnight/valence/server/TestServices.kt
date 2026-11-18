@@ -1,5 +1,6 @@
 package com.lnight.valence.server
 
+import com.lnight.valence.protocol.Base64Url
 import com.lnight.valence.server.domain.AccessTokenVerifier
 import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
 import com.lnight.valence.server.domain.InboxStore
@@ -10,6 +11,8 @@ import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.PublicKeyVerifier
 import com.lnight.valence.server.domain.ReceiveService
 import com.lnight.valence.server.domain.SendMessageService
+import com.lnight.valence.server.domain.SenderCertificateIssuer
+import com.lnight.valence.server.domain.SenderCertificateService
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import java.time.Clock
@@ -22,6 +25,11 @@ internal object FakeAccessTokens {
     val verifier = AccessTokenVerifier { token -> token.removePrefix(PREFIX).takeIf { token.startsWith(PREFIX) } }
 
     fun bearer(mailboxId: String): String = PREFIX + mailboxId
+}
+
+internal object FakeCertificates {
+    val bytes: ByteArray = Base64Url.decode("c3VwZXJjZXJ0")
+    val issuer = SenderCertificateIssuer { _, _, _ -> bytes }
 }
 
 internal object TestServices {
@@ -42,6 +50,7 @@ internal object TestServices {
             messages = SendMessageService(DeliveryKeyAuthenticator(store), inbox, subscriptions, clock),
             receive = ReceiveService(inbox, clock),
             subscriptions = subscriptions,
+            certificates = SenderCertificateService(store, FakeCertificates.issuer, clock),
             tokenVerifier = FakeAccessTokens.verifier,
         )
     }
