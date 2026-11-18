@@ -5,6 +5,8 @@ import com.lnight.valence.protocol.Base64Url
 object ServerConfig {
     const val CHALLENGE_KEY_VARIABLE = "VALENCE_CHALLENGE_KEY"
     const val TOKEN_KEY_VARIABLE = "VALENCE_TOKEN_KEY"
+    const val SERVER_CERTIFICATE_VARIABLE = "VALENCE_SERVER_CERTIFICATE"
+    const val CERTIFICATE_KEY_VARIABLE = "VALENCE_CERTIFICATE_KEY"
 
     fun challengeKey(environment: Map<String, String> = System.getenv()): ByteArray =
         decode(environment, CHALLENGE_KEY_VARIABLE)
@@ -16,6 +18,12 @@ object ServerConfig {
         }
         return key
     }
+
+    fun serverCertificate(environment: Map<String, String> = System.getenv()): ByteArray =
+        decode(environment, SERVER_CERTIFICATE_VARIABLE)
+
+    fun certificateKey(environment: Map<String, String> = System.getenv()): ByteArray =
+        decode(environment, CERTIFICATE_KEY_VARIABLE)
 
     private fun decode(
         environment: Map<String, String>,

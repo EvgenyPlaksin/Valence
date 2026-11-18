@@ -6,6 +6,7 @@ import com.lnight.valence.server.crypto.HmacChallengeAuthenticator
 import com.lnight.valence.server.crypto.JwtAccessTokenIssuer
 import com.lnight.valence.server.crypto.JwtAccessTokenVerifier
 import com.lnight.valence.server.crypto.LibsignalPublicKeyVerifier
+import com.lnight.valence.server.crypto.LibsignalSenderCertificateIssuer
 import com.lnight.valence.server.crypto.SecureRandomBytes
 import com.lnight.valence.server.domain.ChallengeService
 import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
@@ -16,6 +17,7 @@ import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.ReceiveService
 import com.lnight.valence.server.domain.RegistrationService
 import com.lnight.valence.server.domain.SendMessageService
+import com.lnight.valence.server.domain.SenderCertificateService
 import com.lnight.valence.server.routes.AuthTokenRequestMapper
 import com.lnight.valence.server.routes.MessageDeliverFrameMapper
 import com.lnight.valence.server.routes.PreKeyBundleResponseMapper
@@ -29,6 +31,7 @@ import com.lnight.valence.server.routes.loginRoutes
 import com.lnight.valence.server.routes.messageRoutes
 import com.lnight.valence.server.routes.preKeyRoutes
 import com.lnight.valence.server.routes.registrationRoutes
+import com.lnight.valence.server.routes.senderCertificateRoutes
 import com.lnight.valence.server.routes.socketRoutes
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
@@ -83,6 +86,12 @@ private fun createServices(): ServerServices {
         messages = SendMessageService(DeliveryKeyAuthenticator(store), inbox, subscriptions, clock),
         receive = ReceiveService(inbox, clock),
         subscriptions = subscriptions,
+        certificates =
+            SenderCertificateService(
+                store,
+                LibsignalSenderCertificateIssuer(ServerConfig.serverCertificate(), ServerConfig.certificateKey()),
+                clock,
+            ),
         tokenVerifier = JwtAccessTokenVerifier(clock, tokenKey),
     )
 }
@@ -110,5 +119,6 @@ fun Application.module(services: ServerServices) {
         preKeyRoutes(services.bundles, PreKeyBundleResponseMapper())
         messageRoutes(services.messages)
         socketRoutes(services.receive, services.subscriptions, MessageDeliverFrameMapper())
+        senderCertificateRoutes(services.certificates)
     }
 }
