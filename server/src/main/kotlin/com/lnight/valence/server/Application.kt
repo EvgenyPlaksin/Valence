@@ -10,15 +10,19 @@ import com.lnight.valence.server.crypto.LibsignalSenderCertificateIssuer
 import com.lnight.valence.server.crypto.SecureRandomBytes
 import com.lnight.valence.server.domain.ChallengeService
 import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
+import com.lnight.valence.server.domain.InboxPurger
 import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.LoginService
 import com.lnight.valence.server.domain.MailboxSubscriptions
 import com.lnight.valence.server.domain.PreKeyBundleService
+import com.lnight.valence.server.domain.RateLimitPolicies
 import com.lnight.valence.server.domain.ReceiveService
 import com.lnight.valence.server.domain.RegistrationService
 import com.lnight.valence.server.domain.SendMessageService
 import com.lnight.valence.server.domain.SenderCertificateService
+import com.lnight.valence.server.domain.TokenBucketRateLimiter
 import com.lnight.valence.server.routes.AuthTokenRequestMapper
+import com.lnight.valence.server.routes.ClientAddresses
 import com.lnight.valence.server.routes.MessageDeliverFrameMapper
 import com.lnight.valence.server.routes.PreKeyBundleResponseMapper
 import com.lnight.valence.server.routes.RegisterRequestMapper
@@ -26,6 +30,7 @@ import com.lnight.valence.server.routes.ReplaceSignedPreKeysRequestMapper
 import com.lnight.valence.server.routes.UploadOneTimePreKeysRequestMapper
 import com.lnight.valence.server.routes.accessToken
 import com.lnight.valence.server.routes.authRoutes
+import com.lnight.valence.server.routes.ipRateLimiting
 import com.lnight.valence.server.routes.keyRoutes
 import com.lnight.valence.server.routes.loginRoutes
 import com.lnight.valence.server.routes.messageRoutes
@@ -49,12 +54,14 @@ import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
 import java.time.Clock
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 private const val DEFAULT_PORT = 8081
 private const val PING_PERIOD_SECONDS = 20L
 private const val IDLE_TIMEOUT_SECONDS = 40L
 private const val MAX_WEBSOCKET_FRAME_BYTES = 131_072L
+private const val PURGE_INTERVAL_MINUTES = 5L
 
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: DEFAULT_PORT
@@ -65,6 +72,8 @@ fun main() {
 
 private fun createServices(): ServerServices {
     val clock = Clock.systemUTC()
+    val policies = RateLimitPolicies()
+    val limiter = TokenBucketRateLimiter(clock)
     val challenges =
         ChallengeService(
             clock = clock,
@@ -75,24 +84,26 @@ private fun createServices(): ServerServices {
     val store = InMemoryMailboxStore()
     val inbox = InMemoryInboxStore()
     val subscriptions = MailboxSubscriptions()
+    val authenticator = DeliveryKeyAuthenticator(store)
     val tokenKey = ServerConfig.tokenKey()
     val tokens = JwtAccessTokenIssuer(clock, tokenKey)
+    val certificateIssuer =
+        LibsignalSenderCertificateIssuer(ServerConfig.serverCertificate(), ServerConfig.certificateKey())
     return ServerServices(
         challenges = challenges,
         registration = RegistrationService(challenges, keyVerifier, store, tokens, clock),
         login = LoginService(challenges, keyVerifier, store, tokens),
         keys = KeyManagementService(keyVerifier, store),
-        bundles = PreKeyBundleService(DeliveryKeyAuthenticator(store), store),
-        messages = SendMessageService(DeliveryKeyAuthenticator(store), inbox, subscriptions, clock),
-        receive = ReceiveService(inbox, clock),
+        bundles = PreKeyBundleService(authenticator, store, limiter, policies.bundlePerMailbox),
+        messages = SendMessageService(authenticator, inbox, subscriptions, limiter, policies.sendPerMailbox, clock),
+        receive = ReceiveService(inbox, clock, policies.socketFrames),
         subscriptions = subscriptions,
-        certificates =
-            SenderCertificateService(
-                store,
-                LibsignalSenderCertificateIssuer(ServerConfig.serverCertificate(), ServerConfig.certificateKey()),
-                clock,
-            ),
+        certificates = SenderCertificateService(store, certificateIssuer, clock),
         tokenVerifier = JwtAccessTokenVerifier(clock, tokenKey),
+        rateLimiter = limiter,
+        rateLimits = policies,
+        trustProxyHeaders = ServerConfig.trustProxyHeaders(),
+        purger = InboxPurger(inbox, clock),
     )
 }
 
@@ -108,6 +119,12 @@ fun Application.module(services: ServerServices) {
         timeout = IDLE_TIMEOUT_SECONDS.seconds
         maxFrameSize = MAX_WEBSOCKET_FRAME_BYTES
     }
+    install(ipRateLimiting) {
+        limiter = services.rateLimiter
+        policies = services.rateLimits
+        addresses = ClientAddresses(services.trustProxyHeaders)
+    }
+    schedulePurge(services.purger, PURGE_INTERVAL_MINUTES.minutes)
     routing {
         get("/health") {
             call.respond(HealthResponse())

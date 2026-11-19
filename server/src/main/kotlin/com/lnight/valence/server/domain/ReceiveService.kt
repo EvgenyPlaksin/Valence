@@ -5,6 +5,7 @@ import java.time.Clock
 class ReceiveService(
     private val inbox: InboxStore,
     private val clock: Clock,
+    private val framePolicy: RateLimitPolicy = RateLimitPolicies().socketFrames,
 ) {
-    fun open(mailboxId: String): ReceiveSession = ReceiveSession(mailboxId, inbox, clock)
+    fun open(mailboxId: String): ReceiveSession = ReceiveSession(mailboxId, inbox, clock, framePolicy)
 }

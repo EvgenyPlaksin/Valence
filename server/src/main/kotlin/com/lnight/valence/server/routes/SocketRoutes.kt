@@ -8,6 +8,7 @@ import com.lnight.valence.protocol.frame.ErrorCode
 import com.lnight.valence.protocol.frame.ErrorFrame
 import com.lnight.valence.protocol.frame.SyncResumeFrame
 import com.lnight.valence.server.domain.MailboxSubscriptions
+import com.lnight.valence.server.domain.RateLimitDecision
 import com.lnight.valence.server.domain.ReceiveService
 import com.lnight.valence.server.domain.ReceiveSession
 import com.lnight.valence.server.domain.Subscription
@@ -81,23 +82,36 @@ private suspend fun DefaultWebSocketServerSession.readFrames(
     subscription: Subscription,
 ) {
     for (frame in incoming) {
-        when {
-            frame is Frame.Binary -> {
-                rejectFrame()
-            }
+        if ((frame is Frame.Text || frame is Frame.Binary) && !process(frame, session, subscription)) return
+    }
+}
 
-            frame !is Frame.Text -> {
-                Unit
-            }
+private suspend fun DefaultWebSocketServerSession.process(
+    frame: Frame,
+    session: ReceiveSession,
+    subscription: Subscription,
+): Boolean {
+    val decision = session.allowFrame()
+    return when {
+        decision is RateLimitDecision.Limited -> {
+            val error = ErrorFrame(code = ErrorCode.RATE_LIMITED, retryAfterMs = decision.retryAfterMillis)
+            send(Frame.Text(ProtocolJson.encodeServerFrame(error)))
+            true
+        }
 
-            frame.data.size > MAX_CLIENT_FRAME_BYTES -> {
-                close(CloseReason(CloseReason.Codes.TOO_BIG, "frame too large"))
-                return
-            }
+        frame !is Frame.Text -> {
+            rejectFrame()
+            true
+        }
 
-            else -> {
-                handle(frame.readText(), session, subscription)
-            }
+        frame.data.size > MAX_CLIENT_FRAME_BYTES -> {
+            close(CloseReason(CloseReason.Codes.TOO_BIG, "frame too large"))
+            false
+        }
+
+        else -> {
+            handle(frame.readText(), session, subscription)
+            true
         }
     }
 }

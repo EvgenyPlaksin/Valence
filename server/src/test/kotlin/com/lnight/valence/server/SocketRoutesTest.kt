@@ -5,9 +5,13 @@ import com.lnight.valence.protocol.GoldenFixtures
 import com.lnight.valence.protocol.ProtocolHeaders
 import com.lnight.valence.protocol.ProtocolJson
 import com.lnight.valence.protocol.frame.DeliveryConfirmFrame
+import com.lnight.valence.protocol.frame.ErrorCode
+import com.lnight.valence.protocol.frame.ErrorFrame
 import com.lnight.valence.protocol.frame.MessageDeliverFrame
 import com.lnight.valence.protocol.frame.SyncResumeFrame
 import com.lnight.valence.server.domain.NewMessage
+import com.lnight.valence.server.domain.RateLimitPolicies
+import com.lnight.valence.server.domain.RateLimitPolicy
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import io.ktor.client.HttpClient
@@ -44,11 +48,14 @@ class SocketRoutesTest {
     private val token = FakeAccessTokens.bearer(id)
     private val now = ChallengeTestSupport.ISSUED_AT_MILLIS
 
-    private fun ApplicationTestBuilder.start(messages: Int = 0): InMemoryInboxStore {
+    private fun ApplicationTestBuilder.start(
+        messages: Int = 0,
+        policies: RateLimitPolicies = RateLimitPolicies(),
+    ): InMemoryInboxStore {
         val inbox = InMemoryInboxStore()
         (1..messages).forEach { inbox.append(id, NewMessage(byteArrayOf(it.toByte()), now, now + 60_000L), 1_000) }
         val store = InMemoryMailboxStore().also { it.create(DeliveryKeyTestSupport.mailbox(), emptyList()) }
-        application { module(TestServices.create(store = store, inbox = inbox)) }
+        application { module(TestServices.create(store = store, inbox = inbox, policies = policies)) }
         return inbox
     }
 
@@ -248,5 +255,21 @@ class SocketRoutesTest {
             second.sendResume(after = 0)
             assertEquals(1L, second.receiveDelivery().serverSeq)
             second.close()
+        }
+
+    @Test
+    fun `a flood of frames is answered with rate limited errors`() =
+        testApplication {
+            start(policies = RateLimitPolicies(socketFrames = RateLimitPolicy(burst = 3, refillPerSecond = 1.0)))
+
+            socketClient().socket {
+                repeat(5) { send(Frame.Text("not json")) }
+
+                val answers = List(5) { ProtocolJson.decodeServerFrame(receiveText()) as ErrorFrame }
+
+                val expected = List(3) { ErrorCode.INVALID_FRAME } + List(2) { ErrorCode.RATE_LIMITED }
+                assertEquals(expected, answers.map { it.code })
+                assertEquals(1_000L, answers.last().retryAfterMs)
+            }
         }
 }

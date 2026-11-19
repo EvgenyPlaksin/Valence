@@ -18,4 +18,6 @@ interface InboxStore {
         mailboxId: String,
         upToServerSeq: Long,
     )
+
+    fun purgeExpired(nowMillis: Long): Int
 }
