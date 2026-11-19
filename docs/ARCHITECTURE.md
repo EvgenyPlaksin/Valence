@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.13 |
+| **Status** | Draft v1.14 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -327,7 +327,7 @@ The server is one Gradle module organised in four layers. Each layer is a packag
 | Package | Contents | May import |
 |---|---|---|
 | `routes` | Ktor routing and WebSocket handlers. They map `protocol` DTOs to domain types and call the domain. No business rules. | Ktor, `protocol`, `domain` |
-| `domain` | Business rules and the ports they need: mailbox lookup, delivery key verification, TTL, sequencing, rate limits. Framework-free. | Kotlin, kotlinx.coroutines, `java.time`, `java.nio.ByteBuffer`, `java.security.MessageDigest`, `protocol`'s `SignedMessages`, its own package |
+| `domain` | Business rules and the ports they need: mailbox lookup, delivery key verification, TTL, sequencing, rate limits. Framework-free. | Kotlin, kotlinx.coroutines, `java.time`, `java.nio.ByteBuffer`, `java.security.MessageDigest`, `java.util.concurrent.ConcurrentHashMap`, `protocol`'s `SignedMessages`, its own package |
 | `store` | Persistence adapters that implement domain ports | `domain`, database libraries |
 | `crypto` | The only package that may use libsignal, for signature verification and sender certificates. It also implements challenge MACs and access token signing. | `domain`, libsignal, pure helpers of `protocol` |
 
@@ -808,10 +808,28 @@ The append to durable storage **precedes** any live delivery. Live push is an op
 |---|---|
 | Slow consumer | A slow client suspends only its own pump, and its messages stay in the inbox. A connection that stops answering pings is closed after 40 s |
 | Body size | Hard cap 64 KiB for envelopes, enforced before deserialisation |
-| Rate limiting | Anonymous sends: token bucket per recipient mailbox (sustained 20 msg/s, burst 60) plus a per-IP limit. Authenticated endpoints: token bucket per mailbox |
+| Rate limiting | In-memory token buckets (see below). A limited HTTP request answers `429` with `Retry-After` in whole seconds, and a limited WebSocket frame answers an `error` frame with `RATE_LIMITED` and `retryAfterMs` |
 | Idle detection | Ping every 20 s, close after 2 missed pongs |
 | Per-node capacity | Sized by file descriptors and heap; target 50k–100k idle sockets per node on Netty with `-Xss` tuned down |
 | Graceful shutdown | Stop accepting, send close 1001, drain writers, then terminate |
+
+**Rate limits.** The limiter is a token bucket per key, held in memory behind a port so that a shared store can replace it. A bucket holds `burst` tokens and refills at `refill` tokens per second. The defaults are configurable in code:
+
+| Scope | Key | Burst | Refill per second |
+|---|---|---|---|
+| Challenge | client address | 30 | 5 |
+| Registration | client address | 10 | 0.033 |
+| Login | client address | 20 | 1 |
+| Bundle fetch | client address | 30 | 5 |
+| Bundle fetch | recipient mailbox | 10 | 0.1 |
+| Send | client address | 120 | 20 |
+| Send | recipient mailbox | 60 | 20 |
+| Every other request | client address | 60 | 10 |
+| WebSocket control frames | connection | 20 | 10 |
+
+The health endpoint is never limited. A recipient mailbox bucket is charged only after the delivery key check has passed, so an attacker without the key cannot exhaust a victim's bucket. Per-mailbox limits for authenticated HTTP endpoints are covered by the per-address limit for now. The client address is the connection's remote address. Behind a reverse proxy the server uses the last `X-Forwarded-For` entry only when `VALENCE_TRUST_PROXY_HEADERS=true`, which assumes exactly one trusted proxy hop. Idle buckets that would be full again are discarded.
+
+**Expiry purge.** Expired messages are never delivered. A background job deletes them every 5 minutes.
 
 **Horizontal scale.** Nodes are stateless apart from the in-memory registry. Cross-node delivery uses a Redis Pub/Sub channel per mailbox shard (`mbx:{hash mod N}`). If no node holds the recipient, the message simply remains in the inbox and is delivered on next connect. Push notification (FCM) carries **no content**: a data-only wake-up that tells the client to open the socket.
 
@@ -981,7 +999,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Inbox store | PostgreSQL vs. Redis Streams | PostgreSQL for durability; Redis for fan-out signalling only |
 | Attachments | Encrypted blob store with client-held keys | Separate spec; the message plaintext carries only the blob reference and key |
 | Registration abuse control | How to limit mass registration | Per-IP rate limits first. Proof-of-work can be added later because the challenge format can carry a puzzle. |
-| One-time prekey drain | A holder of a delivery key can exhaust a mailbox's one-time prekeys by fetching bundles repeatedly | A per-recipient rate limit on bundle fetches (see 4.1). The bundle degrades gracefully to the signed and Kyber prekeys when the one-time prekeys run out. |
+| One-time prekey drain | A holder of a delivery key can exhaust a mailbox's one-time prekeys by fetching bundles repeatedly | Mitigated by a per-recipient limit on bundle fetches, 10 burst and one every 10 seconds (see 4.1), but not eliminated. The bundle degrades gracefully to the signed and Kyber prekeys when the one-time prekeys run out. |
 | Unknown frame types | Ignore vs. close the connection when a frame `type` is not recognised | The server answers an unknown or invalid client frame with an `error` frame (`INVALID_FRAME`), which is implemented. Clients ignore unknown server frame types, which is not implemented yet: decoding currently fails on an unknown `type`. |
 | Plaintext structure location | `protocol/` vs. a client-only module | Keep the definition and golden fixtures in `protocol/`, and expose it to `:core:data` through a codec interface in `:core:model` that `:core:network` implements, so rule 6 of section 2.3 still holds. |
 
@@ -1096,3 +1114,10 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - The mailbox ID is canonical: its last character encodes two zero padding bits, so every mailbox ID maps to exactly one UUID and back.
 - The server `crypto` layer may use pure helpers of `protocol`.
 - The safety number section states that the server never computes or sees safety numbers.
+
+## Appendix O: Changes from v1.13
+
+- Rate limiting is specified: token buckets per client address, per recipient mailbox, and per WebSocket connection, with the numbers, the `429` and `RATE_LIMITED` responses, the rule that mailbox buckets are charged only after delivery key authorisation, and the proxy header rule.
+- Expired messages are purged by a background job every 5 minutes.
+- The server domain layer may use `ConcurrentHashMap`.
+- The one-time prekey drain is mitigated by a per-recipient fetch limit.
