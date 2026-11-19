@@ -7,6 +7,10 @@ object ServerConfig {
     const val TOKEN_KEY_VARIABLE = "VALENCE_TOKEN_KEY"
     const val SERVER_CERTIFICATE_VARIABLE = "VALENCE_SERVER_CERTIFICATE"
     const val CERTIFICATE_KEY_VARIABLE = "VALENCE_CERTIFICATE_KEY"
+    const val TRUST_PROXY_HEADERS_VARIABLE = "VALENCE_TRUST_PROXY_HEADERS"
+
+    fun trustProxyHeaders(environment: Map<String, String> = System.getenv()): Boolean =
+        environment[TRUST_PROXY_HEADERS_VARIABLE] == "true"
 
     fun challengeKey(environment: Map<String, String> = System.getenv()): ByteArray =
         decode(environment, CHALLENGE_KEY_VARIABLE)

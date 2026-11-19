@@ -8,6 +8,10 @@ sealed interface SendResult {
     data class Rejected(
         val reason: SendRejection,
     ) : SendResult
+
+    data class RateLimited(
+        val retryAfterMillis: Long,
+    ) : SendResult
 }
 
 enum class SendRejection {

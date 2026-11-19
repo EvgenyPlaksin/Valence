@@ -1,8 +1,11 @@
 package com.lnight.valence.server
 
+import com.lnight.valence.server.domain.BundleResult
 import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PreKeyBundleService
+import com.lnight.valence.server.domain.RateLimitPolicy
+import com.lnight.valence.server.domain.TokenBucketRateLimiter
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -15,6 +18,7 @@ import kotlin.test.assertNull
 class PreKeyBundleServiceTest {
     private val id = RegistrationTestSupport.MAILBOX_ID
     private val key = DeliveryKeyTestSupport.deliveryKey
+    private val clock = TestClock(ChallengeTestSupport.ISSUED_AT_MILLIS)
 
     private fun store(oneTimeCount: Int = 2) =
         InMemoryMailboxStore().also {
@@ -22,11 +26,19 @@ class PreKeyBundleServiceTest {
             it.create(DeliveryKeyTestSupport.mailbox(), keys)
         }
 
-    private fun service(store: InMemoryMailboxStore) = PreKeyBundleService(DeliveryKeyAuthenticator(store), store)
+    private fun service(
+        store: InMemoryMailboxStore,
+        policy: RateLimitPolicy = RateLimitPolicy(burst = 100, refillPerSecond = 1.0),
+    ) = PreKeyBundleService(DeliveryKeyAuthenticator(store), store, TokenBucketRateLimiter(clock), policy)
+
+    private fun PreKeyBundleService.bundle(
+        mailboxId: String = id,
+        deliveryKey: ByteArray = key,
+    ) = (fetch(mailboxId, deliveryKey) as? BundleResult.Found)?.bundle
 
     @Test
     fun `an authorised fetch returns the stored keys`() {
-        val bundle = assertNotNull(service(store()).fetch(id, key))
+        val bundle = assertNotNull(service(store()).bundle())
 
         assertContentEquals(ByteArray(33) { 4 }, bundle.identityKey)
         assertEquals(1, bundle.signedPreKey.id)
@@ -39,16 +51,14 @@ class PreKeyBundleServiceTest {
         val store = store()
         val service = service(store)
 
-        assertEquals(1, service.fetch(id, key)?.oneTimePreKey?.id)
-        assertEquals(2, service.fetch(id, key)?.oneTimePreKey?.id)
+        assertEquals(1, service.bundle()?.oneTimePreKey?.id)
+        assertEquals(2, service.bundle()?.oneTimePreKey?.id)
         assertEquals(0, store.oneTimePreKeyCount(id))
     }
 
     @Test
     fun `an exhausted mailbox still returns the signed and kyber prekeys`() {
-        val service = service(store(oneTimeCount = 0))
-
-        val bundle = assertNotNull(service.fetch(id, key))
+        val bundle = assertNotNull(service(store(oneTimeCount = 0)).bundle())
 
         assertNull(bundle.oneTimePreKey)
         assertEquals(1, bundle.signedPreKey.id)
@@ -56,16 +66,37 @@ class PreKeyBundleServiceTest {
     }
 
     @Test
-    fun `a wrong key returns nothing and consumes nothing`() {
+    fun `a wrong key is unauthorised and consumes nothing`() {
         val store = store()
 
-        assertNull(service(store).fetch(id, ByteArray(16) { 4 }))
+        assertEquals(BundleResult.Unauthorized, service(store).fetch(id, ByteArray(16) { 4 }))
         assertEquals(2, store.oneTimePreKeyCount(id))
     }
 
     @Test
-    fun `an unknown mailbox returns nothing`() {
-        assertNull(service(store()).fetch("mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa", key))
+    fun `an unknown mailbox is unauthorised`() {
+        assertEquals(BundleResult.Unauthorized, service(store()).fetch("mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa", key))
+    }
+
+    @Test
+    fun `fetches beyond the recipient limit are limited and consume nothing`() {
+        val store = store(oneTimeCount = 5)
+        val service = service(store, RateLimitPolicy(burst = 2, refillPerSecond = 0.1))
+
+        assertNotNull(service.bundle())
+        assertNotNull(service.bundle())
+
+        assertEquals(BundleResult.RateLimited(10_000L), service.fetch(id, key))
+        assertEquals(3, store.oneTimePreKeyCount(id))
+    }
+
+    @Test
+    fun `unauthorised attempts do not use up the recipient limit`() {
+        val service = service(store(), RateLimitPolicy(burst = 1, refillPerSecond = 0.1))
+
+        repeat(10) { service.fetch(id, ByteArray(16) { 4 }) }
+
+        assertNotNull(service.bundle())
     }
 
     @Test
@@ -73,7 +104,7 @@ class PreKeyBundleServiceTest {
         val service = service(store(oneTimeCount = 20))
         val executor = Executors.newFixedThreadPool(8)
 
-        val bundles = (1..32).map { executor.submit(Callable { service.fetch(id, key) }) }.map { it.get() }
+        val bundles = (1..32).map { executor.submit(Callable { service.bundle() }) }.map { it.get() }
         executor.shutdown()
 
         val handedOut = bundles.mapNotNull { it?.oneTimePreKey?.id }

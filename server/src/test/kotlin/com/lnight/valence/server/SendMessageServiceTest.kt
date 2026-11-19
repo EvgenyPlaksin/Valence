@@ -3,14 +3,13 @@ package com.lnight.valence.server
 import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
 import com.lnight.valence.server.domain.MessageNotifier
 import com.lnight.valence.server.domain.NewMessage
+import com.lnight.valence.server.domain.RateLimitPolicy
 import com.lnight.valence.server.domain.SendMessageService
 import com.lnight.valence.server.domain.SendRejection
 import com.lnight.valence.server.domain.SendResult
+import com.lnight.valence.server.domain.TokenBucketRateLimiter
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
-import java.time.Clock
-import java.time.Instant
-import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -22,13 +21,18 @@ class SendMessageServiceTest {
     private val thirtyDaysMillis = 2_592_000_000L
     private val mailboxes = InMemoryMailboxStore().also { it.create(DeliveryKeyTestSupport.mailbox(), emptyList()) }
     private val inbox = InMemoryInboxStore()
+    private val clock = TestClock(now)
     private val notified = mutableListOf<String>()
-    private val service =
+    private val service = serviceWith(RateLimitPolicy(burst = 100, refillPerSecond = 1.0))
+
+    private fun serviceWith(policy: RateLimitPolicy) =
         SendMessageService(
             DeliveryKeyAuthenticator(mailboxes),
             inbox,
-            MessageNotifier { mailboxId -> notified += mailboxId },
-            Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC),
+            MessageNotifier { notified += it },
+            TokenBucketRateLimiter(clock),
+            policy,
+            clock,
         )
 
     private fun send(
@@ -120,5 +124,28 @@ class SendMessageServiceTest {
         send(envelope = ByteArray(65_537))
 
         assertTrue(notified.isEmpty())
+    }
+
+    @Test
+    fun `a mailbox that receives too many messages is limited with a retry hint`() {
+        val limited = serviceWith(RateLimitPolicy(burst = 2, refillPerSecond = 1.0))
+        val envelope = ByteArray(10) { 1 }
+        val key = DeliveryKeyTestSupport.deliveryKey
+
+        repeat(2) { assertEquals(SendResult.Accepted(now), limited.send(id, key, envelope, null)) }
+        assertEquals(SendResult.RateLimited(1_000L), limited.send(id, key, envelope, null))
+        clock.advance(1_000L)
+        assertEquals(SendResult.Accepted(now + 1_000L), limited.send(id, key, envelope, null))
+    }
+
+    @Test
+    fun `unauthorised attempts do not use up the mailbox limit`() {
+        val limited = serviceWith(RateLimitPolicy(burst = 2, refillPerSecond = 1.0))
+        val envelope = ByteArray(10) { 1 }
+
+        repeat(10) { limited.send(id, ByteArray(16) { 4 }, envelope, null) }
+
+        val result = limited.send(id, DeliveryKeyTestSupport.deliveryKey, envelope, null)
+        assertEquals(SendResult.Accepted(now), result)
     }
 }
