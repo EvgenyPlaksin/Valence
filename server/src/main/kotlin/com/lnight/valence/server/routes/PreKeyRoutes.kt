@@ -3,6 +3,7 @@ package com.lnight.valence.server.routes
 import com.lnight.valence.protocol.Base64Url
 import com.lnight.valence.protocol.ProtocolHeaders
 import com.lnight.valence.protocol.ProtocolRoutes
+import com.lnight.valence.server.domain.BundleResult
 import com.lnight.valence.server.domain.PreKeyBundleService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.response.respond
@@ -17,11 +18,10 @@ fun Route.preKeyRoutes(
         val mailboxId = call.parameters["mailboxId"].orEmpty()
         val deliveryKey =
             call.request.headers[ProtocolHeaders.DELIVERY_KEY]?.let { Parsing.orNull { Base64Url.decode(it) } }
-        val bundle = deliveryKey?.let { service.fetch(mailboxId, it) }
-        if (bundle == null) {
-            call.respond(HttpStatusCode.Unauthorized)
-        } else {
-            call.respond(mapper.toResponse(bundle))
+        when (val result = deliveryKey?.let { service.fetch(mailboxId, it) } ?: BundleResult.Unauthorized) {
+            is BundleResult.Found -> call.respond(mapper.toResponse(result.bundle))
+            is BundleResult.RateLimited -> call.respondRateLimited(result.retryAfterMillis)
+            BundleResult.Unauthorized -> call.respond(HttpStatusCode.Unauthorized)
         }
     }
 }

@@ -6,8 +6,12 @@ class ReceiveSession(
     private val mailboxId: String,
     private val inbox: InboxStore,
     private val clock: Clock,
+    private val framePolicy: RateLimitPolicy = RateLimitPolicies().socketFrames,
 ) {
+    private val frames = TokenBucketRateLimiter(clock)
     private var cursor: Long? = null
+
+    fun allowFrame(): RateLimitDecision = frames.tryAcquire(FRAMES_KEY, framePolicy)
 
     @Synchronized
     fun resume(afterServerSeq: Long): Boolean {
@@ -37,5 +41,6 @@ class ReceiveSession(
 
     private companion object {
         const val BATCH_SIZE = 100
+        const val FRAMES_KEY = "frames"
     }
 }

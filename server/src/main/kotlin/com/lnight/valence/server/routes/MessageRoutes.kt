@@ -82,6 +82,10 @@ private suspend fun ApplicationCall.respondWith(result: SendResult) {
         is SendResult.Rejected -> {
             respondRejected(result.reason)
         }
+
+        is SendResult.RateLimited -> {
+            respondRateLimited(result.retryAfterMillis)
+        }
     }
 }
 

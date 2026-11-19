@@ -53,6 +53,15 @@ class InMemoryInboxStore : InboxStore {
         }
     }
 
+    override fun purgeExpired(nowMillis: Long): Int =
+        queues.values.sumOf { queue ->
+            synchronized(queue) {
+                val before = queue.messages.size
+                queue.messages.removeAll { it.expiresAtMillis <= nowMillis }
+                before - queue.messages.size
+            }
+        }
+
     private class Queue {
         var lastSeq = 0L
         val messages = mutableListOf<QueuedMessage>()
