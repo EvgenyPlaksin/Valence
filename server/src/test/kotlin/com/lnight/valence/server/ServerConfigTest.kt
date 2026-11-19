@@ -3,6 +3,7 @@ package com.lnight.valence.server
 import com.lnight.valence.protocol.Base64Url
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class ServerConfigTest {
@@ -59,5 +60,12 @@ class ServerConfigTest {
     fun `missing certificate configuration fails fast`() {
         assertFailsWith<IllegalStateException> { ServerConfig.serverCertificate(emptyMap()) }
         assertFailsWith<IllegalStateException> { ServerConfig.certificateKey(emptyMap()) }
+    }
+
+    @Test
+    fun `proxy headers are trusted only when explicitly enabled`() {
+        assertEquals(false, ServerConfig.trustProxyHeaders(emptyMap()))
+        assertEquals(false, ServerConfig.trustProxyHeaders(mapOf(ServerConfig.TRUST_PROXY_HEADERS_VARIABLE to "yes")))
+        assertEquals(true, ServerConfig.trustProxyHeaders(mapOf(ServerConfig.TRUST_PROXY_HEADERS_VARIABLE to "true")))
     }
 }

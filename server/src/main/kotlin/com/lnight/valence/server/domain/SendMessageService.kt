@@ -7,6 +7,8 @@ class SendMessageService(
     private val authenticator: DeliveryKeyAuthenticator,
     private val inbox: InboxStore,
     private val notifier: MessageNotifier,
+    private val limiter: RateLimiter,
+    private val mailboxPolicy: RateLimitPolicy,
     private val clock: Clock,
 ) {
     fun send(
@@ -18,8 +20,19 @@ class SendMessageService(
         val mailbox =
             authenticator.authenticate(mailboxId, deliveryKey)
                 ?: return SendResult.Rejected(SendRejection.UNAUTHORIZED)
+        return when (val decision = limiter.tryAcquire("send:mailbox:${mailbox.id}", mailboxPolicy)) {
+            is RateLimitDecision.Limited -> SendResult.RateLimited(decision.retryAfterMillis)
+            RateLimitDecision.Allowed -> accept(mailbox.id, envelope, ttlSeconds)
+        }
+    }
+
+    private fun accept(
+        mailboxId: String,
+        envelope: ByteArray,
+        ttlSeconds: Long?,
+    ): SendResult {
         val rejection = requestRejection(envelope, ttlSeconds)
-        return if (rejection != null) SendResult.Rejected(rejection) else append(mailbox.id, envelope, ttlSeconds)
+        return if (rejection != null) SendResult.Rejected(rejection) else append(mailboxId, envelope, ttlSeconds)
     }
 
     private fun requestRejection(

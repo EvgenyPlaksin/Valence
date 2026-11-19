@@ -3,16 +3,19 @@ package com.lnight.valence.server
 import com.lnight.valence.protocol.Base64Url
 import com.lnight.valence.server.domain.AccessTokenVerifier
 import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
+import com.lnight.valence.server.domain.InboxPurger
 import com.lnight.valence.server.domain.InboxStore
 import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.MailboxStore
 import com.lnight.valence.server.domain.MailboxSubscriptions
 import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.PublicKeyVerifier
+import com.lnight.valence.server.domain.RateLimitPolicies
 import com.lnight.valence.server.domain.ReceiveService
 import com.lnight.valence.server.domain.SendMessageService
 import com.lnight.valence.server.domain.SenderCertificateIssuer
 import com.lnight.valence.server.domain.SenderCertificateService
+import com.lnight.valence.server.domain.TokenBucketRateLimiter
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import java.time.Clock
@@ -38,20 +41,28 @@ internal object TestServices {
         store: MailboxStore = InMemoryMailboxStore(),
         inbox: InboxStore = InMemoryInboxStore(),
         atMillis: Long = ChallengeTestSupport.ISSUED_AT_MILLIS,
+        policies: RateLimitPolicies = RateLimitPolicies(),
+        trustProxyHeaders: Boolean = false,
+        clock: TestClock = TestClock(atMillis),
     ): ServerServices {
-        val clock = Clock.fixed(Instant.ofEpochMilli(atMillis), ZoneOffset.UTC)
         val subscriptions = MailboxSubscriptions()
+        val limiter = TokenBucketRateLimiter(clock)
+        val authenticator = DeliveryKeyAuthenticator(store)
         return ServerServices(
             challenges = ChallengeTestSupport.service(atMillis),
             registration = RegistrationTestSupport.service(verifier, store, atMillis),
             login = LoginTestSupport.service(verifier, store, atMillis),
             keys = KeyManagementService(verifier, store),
-            bundles = PreKeyBundleService(DeliveryKeyAuthenticator(store), store),
-            messages = SendMessageService(DeliveryKeyAuthenticator(store), inbox, subscriptions, clock),
-            receive = ReceiveService(inbox, clock),
+            bundles = PreKeyBundleService(authenticator, store, limiter, policies.bundlePerMailbox),
+            messages = SendMessageService(authenticator, inbox, subscriptions, limiter, policies.sendPerMailbox, clock),
+            receive = ReceiveService(inbox, clock, policies.socketFrames),
             subscriptions = subscriptions,
             certificates = SenderCertificateService(store, FakeCertificates.issuer, clock),
             tokenVerifier = FakeAccessTokens.verifier,
+            rateLimiter = limiter,
+            rateLimits = policies,
+            trustProxyHeaders = trustProxyHeaders,
+            purger = InboxPurger(inbox, clock),
         )
     }
 }
