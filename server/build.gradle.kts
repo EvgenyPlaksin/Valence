@@ -84,6 +84,10 @@ tasks.register<Test>("integrationTest") {
     testClassesDirs = integrationTestSourceSet.output.classesDirs
     classpath = integrationTestSourceSet.runtimeClasspath
     useJUnitPlatform()
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
     outputs.upToDateWhen { false }
     shouldRunAfter(tasks.test)
 }
