@@ -40,14 +40,50 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
 
 The trust root private key must never reach the server or any machine that holds the repository checkout for daily work.
 
-1. On an offline machine: `./gradlew -q generateTrustRoot`. Store the private key offline with a backup, and pin the public key in the app's build configuration.
-2. Where the server's secrets live: `./gradlew -q generateServerKey`. Put the private key in `VALENCE_CERTIFICATE_KEY` and send the public key to whoever holds the trust root.
-3. On the offline machine, with the trust root private key in `VALENCE_TRUST_ROOT_PRIVATE_KEY`: `./gradlew -q signServerCertificate --args="<server public key> <key id>"`.
-4. Put the result in `VALENCE_SERVER_CERTIFICATE`.
+Run the Gradle tasks from `server/`. Key-generation tasks require `-PkeyOutputDirectory` to name an existing absolute directory outside every Git worktree. Use a directory owned by the operator. Private key files are written with owner-only permissions; the tools print public keys and file paths, never private key contents.
+
+Linux:
+
+```sh
+key_directory="$HOME/valence-keys"
+mkdir -p "$key_directory"
+chmod 700 "$key_directory"
+./gradlew -PkeyOutputDirectory="$key_directory" generateTrustRoot
+```
+
+PowerShell:
+
+```powershell
+$keyDirectory = Join-Path $HOME "ValenceKeys"
+New-Item -ItemType Directory -Path $keyDirectory -Force | Out-Null
+.\gradlew.bat -PkeyOutputDirectory="$keyDirectory" generateTrustRoot
+```
+
+1. On a dedicated offline machine, generate the trust root as shown above. Keep `trust-root-private.key` offline with a secure backup, and pin only the printed public key in the app's build configuration.
+2. Where the server's secrets live, create a private output directory and run `generateServerKey` from `server/` with `-PkeyOutputDirectory=<absolute directory>`: on Linux, `./gradlew -PkeyOutputDirectory="$key_directory" generateServerKey`; in PowerShell, `.\gradlew.bat -PkeyOutputDirectory="$keyDirectory" generateServerKey`. Store `server-signing-private.key` in the server's secret manager as `VALENCE_CERTIFICATE_KEY`, and send only its public key to whoever holds the trust root.
+3. On the offline machine, load `trust-root-private.key` into `VALENCE_TRUST_ROOT_PRIVATE_KEY` through the process environment, then sign the server certificate using the public key and key id as Gradle properties:
+
+   ```sh
+   VALENCE_TRUST_ROOT_PRIVATE_KEY="$(cat "$key_directory/trust-root-private.key")" \
+     ./gradlew --no-daemon -PserverPublicKey="<server public key>" -PkeyId=1 signServerCertificate
+   ```
+
+   ```powershell
+   $env:VALENCE_TRUST_ROOT_PRIVATE_KEY = [System.IO.File]::ReadAllText("$keyDirectory\trust-root-private.key")
+   try {
+       .\gradlew.bat --no-daemon -PserverPublicKey="<server public key>" -PkeyId=1 signServerCertificate
+   }
+   finally {
+       Remove-Item Env:VALENCE_TRUST_ROOT_PRIVATE_KEY
+   }
+   ```
+
+   `--no-daemon` avoids retaining the private-key environment variable in a persistent Gradle daemon. Do not print the environment variable or pass the private key as a command-line argument or Gradle property. The signing task prints the certificate, not the private key.
+4. Put the resulting certificate in `VALENCE_SERVER_CERTIFICATE`.
 
 To rotate the server key, repeat steps 2 to 4 with a new key id. No app update is needed. Replacing the trust root needs an app update.
 
-`./gradlew -q generateCertificateKeys` prints all keys at once. It is for development only.
+`generateCertificateKeys` is for development only. It also requires `-PkeyOutputDirectory=<absolute directory outside the repository>`, writes private keys with owner-only permissions, and does not print private key contents. Do not use it to create production keys.
 
 ## Container
 
