@@ -75,3 +75,10 @@ updates:
       libsignal:
         patterns:
           - "org.signal*"
+
+  - package-ecosystem: docker
+    directory: /server
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"

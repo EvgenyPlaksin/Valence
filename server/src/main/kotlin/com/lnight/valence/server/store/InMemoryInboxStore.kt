@@ -62,6 +62,8 @@ class InMemoryInboxStore : InboxStore {
             }
         }
 
+    override fun queueDepth(): Int = queues.values.sumOf { queue -> synchronized(queue) { queue.messages.size } }
+
     private class Queue {
         var lastSeq = 0L
         val messages = mutableListOf<QueuedMessage>()

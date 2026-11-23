@@ -8,9 +8,18 @@ object ServerConfig {
     const val SERVER_CERTIFICATE_VARIABLE = "VALENCE_SERVER_CERTIFICATE"
     const val CERTIFICATE_KEY_VARIABLE = "VALENCE_CERTIFICATE_KEY"
     const val TRUST_PROXY_HEADERS_VARIABLE = "VALENCE_TRUST_PROXY_HEADERS"
+    const val METRICS_TOKEN_VARIABLE = "VALENCE_METRICS_TOKEN"
+    private const val MINIMUM_METRICS_TOKEN_LENGTH = 16
 
     fun trustProxyHeaders(environment: Map<String, String> = System.getenv()): Boolean =
         environment[TRUST_PROXY_HEADERS_VARIABLE] == "true"
+
+    fun metricsToken(environment: Map<String, String> = System.getenv()): String? =
+        environment[METRICS_TOKEN_VARIABLE]?.takeIf { it.isNotBlank() }?.also {
+            check(it.length >= MINIMUM_METRICS_TOKEN_LENGTH) {
+                "$METRICS_TOKEN_VARIABLE needs at least $MINIMUM_METRICS_TOKEN_LENGTH characters"
+            }
+        }
 
     fun challengeKey(environment: Map<String, String> = System.getenv()): ByteArray =
         decode(environment, CHALLENGE_KEY_VARIABLE)
