@@ -39,7 +39,7 @@ internal class RecordingMailboxStore(
     val created = mutableListOf<Mailbox>()
     val createdOneTimeKeys = mutableListOf<List<OneTimePreKey>>()
 
-    override fun create(
+    override suspend fun create(
         mailbox: Mailbox,
         oneTimePreKeys: List<OneTimePreKey>,
     ): Boolean {

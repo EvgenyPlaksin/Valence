@@ -8,6 +8,7 @@ import com.lnight.valence.server.domain.Login
 import com.lnight.valence.server.domain.LoginRejection
 import com.lnight.valence.server.domain.LoginResult
 import com.lnight.valence.server.domain.LoginService
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -16,13 +17,13 @@ import kotlin.test.assertTrue
 
 class LoginServiceTest {
     private fun storeWithMailbox() =
-        RecordingMailboxStore().also { it.create(RegistrationTestSupport.mailbox(), emptyList()) }
+        RecordingMailboxStore().apply { runBlocking { create(RegistrationTestSupport.mailbox(), emptyList()) } }
 
     private fun assertRejected(
         expected: LoginRejection,
         login: Login,
         service: LoginService = LoginTestSupport.service(store = storeWithMailbox()),
-    ) {
+    ) = runBlocking {
         assertEquals(LoginResult.Rejected(expected), service.login(login))
     }
 
@@ -34,11 +35,12 @@ class LoginServiceTest {
             .also { it[it.lastIndex] = 0 }
 
     @Test
-    fun `a valid login is answered with a token`() {
-        val result = LoginTestSupport.service(store = storeWithMailbox()).login(LoginTestSupport.login())
+    fun `a valid login is answered with a token`() =
+        runBlocking {
+            val result = LoginTestSupport.service(store = storeWithMailbox()).login(LoginTestSupport.login())
 
-        assertEquals("token-for-$MAILBOX_ID", assertIs<LoginResult.LoggedIn>(result).token.value)
-    }
+            assertEquals("token-for-$MAILBOX_ID", assertIs<LoginResult.LoggedIn>(result).token.value)
+        }
 
     @Test
     fun `an expired challenge is rejected`() {
@@ -101,17 +103,21 @@ class LoginServiceTest {
     }
 
     @Test
-    fun `the signature is verified under the stored key over the rebuilt login message`() {
-        val storedKey = ByteArray(33) { 7 }
-        val store = RecordingMailboxStore().also { it.create(RegistrationTestSupport.mailbox(storedKey), emptyList()) }
-        val verifier = FakePublicKeyVerifier()
-        val login = LoginTestSupport.login()
+    fun `the signature is verified under the stored key over the rebuilt login message`() =
+        runBlocking {
+            val storedKey = ByteArray(33) { 7 }
+            val store =
+                RecordingMailboxStore().apply {
+                    create(RegistrationTestSupport.mailbox(storedKey), emptyList())
+                }
+            val verifier = FakePublicKeyVerifier()
+            val login = LoginTestSupport.login()
 
-        LoginTestSupport.service(verifier = verifier, store = store).login(login)
+            LoginTestSupport.service(verifier = verifier, store = store).login(login)
 
-        val verification = verifier.verifications.single()
-        assertContentEquals(storedKey, verification.signerKey)
-        assertContentEquals(SignedMessages.login(login.challenge, login.mailboxId), verification.message)
-        assertContentEquals(login.signature, verification.signature)
-    }
+            val verification = verifier.verifications.single()
+            assertContentEquals(storedKey, verification.signerKey)
+            assertContentEquals(SignedMessages.login(login.challenge, login.mailboxId), verification.message)
+            assertContentEquals(login.signature, verification.signature)
+        }
 }

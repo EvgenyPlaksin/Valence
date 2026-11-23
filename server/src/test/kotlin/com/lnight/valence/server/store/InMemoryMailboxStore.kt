@@ -11,16 +11,16 @@ import java.util.concurrent.ConcurrentHashMap
 class InMemoryMailboxStore : MailboxStore {
     private val mailboxes = ConcurrentHashMap<String, StoredMailbox>()
 
-    override fun create(
+    override suspend fun create(
         mailbox: Mailbox,
         oneTimePreKeys: List<OneTimePreKey>,
     ): Boolean = mailboxes.putIfAbsent(mailbox.id, StoredMailbox(mailbox, oneTimePreKeys)) == null
 
-    override fun find(mailboxId: String): Mailbox? = mailboxes[mailboxId]?.mailbox
+    override suspend fun find(mailboxId: String): Mailbox? = mailboxes[mailboxId]?.mailbox
 
-    override fun oneTimePreKeyCount(mailboxId: String): Int? = mailboxes[mailboxId]?.oneTimePreKeys?.size
+    override suspend fun oneTimePreKeyCount(mailboxId: String): Int? = mailboxes[mailboxId]?.oneTimePreKeys?.size
 
-    override fun replaceSignedPreKeys(
+    override suspend fun replaceSignedPreKeys(
         mailboxId: String,
         signedPreKey: SignedPublicKey,
         kyberPreKey: SignedPublicKey,
@@ -34,7 +34,7 @@ class InMemoryMailboxStore : MailboxStore {
             }
         }
 
-    override fun addOneTimePreKeys(
+    override suspend fun addOneTimePreKeys(
         mailboxId: String,
         keys: List<OneTimePreKey>,
         maxStored: Int,
@@ -48,7 +48,7 @@ class InMemoryMailboxStore : MailboxStore {
             }
         }
 
-    override fun takeBundle(mailboxId: String): PreKeyBundle? {
+    override suspend fun takeBundle(mailboxId: String): PreKeyBundle? {
         var bundle: PreKeyBundle? = null
         mailboxes.computeIfPresent(mailboxId) { _, stored ->
             val mailbox = stored.mailbox

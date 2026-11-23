@@ -12,13 +12,13 @@ class RegistrationService(
 ) {
     private val validator = RegistrationValidator(keyVerifier)
 
-    fun register(registration: Registration): RegistrationResult {
+    suspend fun register(registration: Registration): RegistrationResult {
         val rejection =
             challengeRejection(registration) ?: structureRejection(registration) ?: signatureRejection(registration)
         return if (rejection != null) RegistrationResult.Rejected(rejection) else persist(registration)
     }
 
-    private fun persist(registration: Registration): RegistrationResult {
+    private suspend fun persist(registration: Registration): RegistrationResult {
         val mailbox =
             Mailbox(
                 id = registration.mailboxId,

@@ -143,7 +143,7 @@ private suspend fun DefaultWebSocketServerSession.handle(
     if (!accepted) rejectFrame(connection)
 }
 
-private fun resume(
+private suspend fun resume(
     frame: SyncResumeFrame,
     connection: Connection,
 ): Boolean {

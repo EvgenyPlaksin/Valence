@@ -32,7 +32,7 @@ class MessageRoutesTest {
     private val fixtureTs = 1_760_000_000_123L
 
     private fun ApplicationTestBuilder.start(inbox: InMemoryInboxStore = InMemoryInboxStore()): InMemoryInboxStore {
-        val store = InMemoryMailboxStore().also { it.create(DeliveryKeyTestSupport.mailbox(), emptyList()) }
+        val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox())
         application { module(TestServices.create(store = store, inbox = inbox, atMillis = fixtureTs)) }
         return inbox
     }
@@ -147,7 +147,9 @@ class MessageRoutesTest {
     fun `a full mailbox answers 429 with a retry hint`() =
         testApplication {
             val inbox = InMemoryInboxStore()
-            repeat(1_000) { inbox.append(id, NewMessage(ByteArray(1), fixtureTs, fixtureTs + 86_400_000L), 1_000) }
+            kotlinx.coroutines.runBlocking {
+                repeat(1_000) { inbox.append(id, NewMessage(ByteArray(1), fixtureTs, fixtureTs + 86_400_000L), 1_000) }
+            }
             start(inbox)
 
             val response = client.send(request())

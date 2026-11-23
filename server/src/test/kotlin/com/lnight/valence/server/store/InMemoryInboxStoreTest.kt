@@ -2,8 +2,10 @@ package com.lnight.valence.server.store
 
 import com.lnight.valence.server.domain.AppendResult
 import com.lnight.valence.server.domain.NewMessage
-import java.util.concurrent.Callable
-import java.util.concurrent.Executors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -19,7 +21,7 @@ class InMemoryInboxStoreTest {
         fill: Byte = 1,
     ) = NewMessage(ByteArray(4) { fill }, at, expiresAt)
 
-    private fun InMemoryInboxStore.add(
+    private suspend fun InMemoryInboxStore.add(
         mailboxId: String = id,
         message: NewMessage = message(),
         maxQueued: Int = 1_000,
@@ -28,63 +30,67 @@ class InMemoryInboxStoreTest {
     private fun seq(result: AppendResult) = assertIs<AppendResult.Appended>(result).serverSeq
 
     @Test
-    fun `sequence numbers start at 1 and increase`() {
-        val store = InMemoryInboxStore()
+    fun `sequence numbers start at 1 and increase`() =
+        runTest {
+            val store = InMemoryInboxStore()
 
-        assertEquals(listOf(1L, 2L, 3L), (1..3).map { seq(store.add()) })
-    }
-
-    @Test
-    fun `mailboxes have independent sequences`() {
-        val store = InMemoryInboxStore()
-        store.add()
-        store.add()
-
-        assertEquals(1L, seq(store.add(mailboxId = other)))
-    }
+            assertEquals(listOf(1L, 2L, 3L), (1..3).map { seq(store.add()) })
+        }
 
     @Test
-    fun `messages after a number are returned in ascending order and exclude that number`() {
-        val store = InMemoryInboxStore()
-        (1..4).forEach { store.add(message = message(fill = it.toByte())) }
+    fun `mailboxes have independent sequences`() =
+        runTest {
+            val store = InMemoryInboxStore()
+            store.add()
+            store.add()
 
-        val messages = store.messagesAfter(id, 2)
-
-        assertEquals(listOf(3L, 4L), messages.map { it.serverSeq })
-        assertContentEquals(ByteArray(4) { 3 }, messages.first().envelope)
-        assertEquals(emptyList(), store.messagesAfter(other, 0))
-    }
+            assertEquals(1L, seq(store.add(mailboxId = other)))
+        }
 
     @Test
-    fun `a full mailbox is rejected without consuming a number`() {
-        val store = InMemoryInboxStore()
-        val shortLived = message(at = 1_000L, expiresAt = 5_000L)
+    fun `messages after a number are returned in ascending order and exclude that number`() =
+        runTest {
+            val store = InMemoryInboxStore()
+            (1..4).forEach { store.add(message = message(fill = it.toByte())) }
 
-        store.add(message = shortLived, maxQueued = 2)
-        store.add(message = shortLived, maxQueued = 2)
+            val messages = store.messagesAfter(id, 2)
 
-        assertEquals(AppendResult.QuotaExceeded, store.add(message = message(at = 2_000L), maxQueued = 2))
-        assertEquals(3L, seq(store.add(message = message(at = 5_000L), maxQueued = 2)))
-    }
-
-    @Test
-    fun `expired messages are dropped and their numbers are never reused`() {
-        val store = InMemoryInboxStore()
-        store.add(message = message(at = 1_000L, expiresAt = 5_000L))
-
-        store.add(message = message(at = 5_000L))
-
-        assertEquals(listOf(2L), store.messagesAfter(id, 0).map { it.serverSeq })
-    }
+            assertEquals(listOf(3L, 4L), messages.map { it.serverSeq })
+            assertContentEquals(ByteArray(4) { 3 }, messages.first().envelope)
+            assertEquals(emptyList(), store.messagesAfter(other, 0))
+        }
 
     @Test
-    fun `concurrent appends receive unique sequence numbers`() {
-        val store = InMemoryInboxStore()
-        val executor = Executors.newFixedThreadPool(8)
+    fun `a full mailbox is rejected without consuming a number`() =
+        runTest {
+            val store = InMemoryInboxStore()
+            val shortLived = message(at = 1_000L, expiresAt = 5_000L)
 
-        val numbers = (1..200).map { executor.submit(Callable { seq(store.add()) }) }.map { it.get() }
-        executor.shutdown()
+            store.add(message = shortLived, maxQueued = 2)
+            store.add(message = shortLived, maxQueued = 2)
 
-        assertEquals((1L..200L).toList(), numbers.sorted())
-    }
+            assertEquals(AppendResult.QuotaExceeded, store.add(message = message(at = 2_000L), maxQueued = 2))
+            assertEquals(3L, seq(store.add(message = message(at = 5_000L), maxQueued = 2)))
+        }
+
+    @Test
+    fun `expired messages are dropped and their numbers are never reused`() =
+        runTest {
+            val store = InMemoryInboxStore()
+            store.add(message = message(at = 1_000L, expiresAt = 5_000L))
+
+            store.add(message = message(at = 5_000L))
+
+            assertEquals(listOf(2L), store.messagesAfter(id, 0).map { it.serverSeq })
+        }
+
+    @Test
+    fun `concurrent appends receive unique sequence numbers`() =
+        runTest {
+            val store = InMemoryInboxStore()
+
+            val numbers = (1..200).map { async(Dispatchers.Default) { seq(store.add()) } }.awaitAll()
+
+            assertEquals((1L..200L).toList(), numbers.sorted())
+        }
 }

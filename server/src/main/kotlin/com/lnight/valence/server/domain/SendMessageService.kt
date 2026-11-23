@@ -11,7 +11,7 @@ class SendMessageService(
     private val mailboxPolicy: RateLimitPolicy,
     private val clock: Clock,
 ) {
-    fun send(
+    suspend fun send(
         mailboxId: String,
         deliveryKey: ByteArray,
         envelope: ByteArray,
@@ -26,7 +26,7 @@ class SendMessageService(
         }
     }
 
-    private fun accept(
+    private suspend fun accept(
         mailboxId: String,
         envelope: ByteArray,
         ttlSeconds: Long?,
@@ -53,7 +53,7 @@ class SendMessageService(
             }
         }
 
-    private fun append(
+    private suspend fun append(
         mailboxId: String,
         envelope: ByteArray,
         ttlSeconds: Long?,

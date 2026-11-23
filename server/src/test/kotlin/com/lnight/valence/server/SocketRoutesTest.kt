@@ -48,13 +48,13 @@ class SocketRoutesTest {
     private val token = FakeAccessTokens.bearer(id)
     private val now = ChallengeTestSupport.ISSUED_AT_MILLIS
 
-    private fun ApplicationTestBuilder.start(
+    private suspend fun ApplicationTestBuilder.start(
         messages: Int = 0,
         policies: RateLimitPolicies = RateLimitPolicies(),
     ): InMemoryInboxStore {
         val inbox = InMemoryInboxStore()
         (1..messages).forEach { inbox.append(id, NewMessage(byteArrayOf(it.toByte()), now, now + 60_000L), 1_000) }
-        val store = InMemoryMailboxStore().also { it.create(DeliveryKeyTestSupport.mailbox(), emptyList()) }
+        val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox())
         application { module(TestServices.create(store = store, inbox = inbox, policies = policies)) }
         return inbox
     }
@@ -83,7 +83,8 @@ class SocketRoutesTest {
         )
     }
 
-    private suspend fun awaitUntil(condition: () -> Boolean) = withTimeout(5.seconds) { while (!condition()) delay(10) }
+    private suspend fun awaitUntil(condition: suspend () -> Boolean) =
+        withTimeout(5.seconds) { while (!condition()) delay(10) }
 
     private suspend fun HttpClient.sendMessage(envelope: String) =
         post("/v1/messages/$id") {

@@ -6,6 +6,7 @@ This is the runbook for running the server. The design and the reasons behind it
 
 - x86_64 Linux with glibc (Debian or Ubuntu). libsignal ships native libraries for that platform only, so Alpine and ARM64 do not work unless libsignal is built from source.
 - Java 21.
+- Docker Compose v2 for the local PostgreSQL-backed setup.
 - A writable temporary directory. As far as I know libsignal unpacks its native library there at startup. Check this if you run with a read-only root filesystem, and mount a tmpfs on `/tmp`.
 
 ## Configuration
@@ -19,6 +20,11 @@ Everything comes from environment variables. None of the secrets below belong in
 | `VALENCE_TOKEN_KEY` | Yes | At least 32 random bytes, Base64URL, different from the challenge key. Signs access tokens |
 | `VALENCE_SERVER_CERTIFICATE` | Yes | The server certificate signed by the trust root |
 | `VALENCE_CERTIFICATE_KEY` | Yes | The private key that matches the server certificate |
+| `VALENCE_DATABASE_URL` | Yes | PostgreSQL JDBC URL, without credentials |
+| `VALENCE_DATABASE_USER` | Yes | PostgreSQL username |
+| `VALENCE_DATABASE_PASSWORD` | Yes | PostgreSQL password |
+| `VALENCE_DB_MAX_CONNECTIONS` | No | Hikari connection limit and matching database-dispatcher parallelism, default 10 |
+| `VALENCE_DB_AUTO_MIGRATE` | No | Run Flyway migrations at startup, default `true`; when `false`, startup fails if migrations are pending |
 | `VALENCE_TRUST_PROXY_HEADERS` | No | `true` only behind exactly one trusted reverse proxy that appends `X-Forwarded-For` |
 | `VALENCE_METRICS_TOKEN` | No | At least 16 characters. Enables `GET /metrics` for requests with this bearer token |
 
@@ -85,24 +91,63 @@ To rotate the server key, repeat steps 2 to 4 with a new key id. No app update i
 
 `generateCertificateKeys` is for development only. It also requires `-PkeyOutputDirectory=<absolute directory outside the repository>`, writes private keys with owner-only permissions, and does not print private key contents. Do not use it to create production keys.
 
-## Container
+## Local PostgreSQL with Docker Compose
 
-Build from the repository root:
+Copy `.env.example` to `.env`, replace every placeholder with private values and the server certificate/key from the key ceremony, then start the server and PostgreSQL from the repository root:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+```sh
+cp .env.example .env
+docker compose up --build
+```
+
+Compose keeps PostgreSQL on its private network and stores its data in the named `postgres-data` volume. The server waits for PostgreSQL's health check and applies Flyway migrations at startup by default. `docker compose down` stops the services without deleting the data volume; `docker compose down --volumes` deletes it.
+
+The database volume is not a backup. Create and store PostgreSQL backups separately. For a plain SQL dump:
+
+```sh
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > valence.sql
+```
+
+PowerShell:
+
+```powershell
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > /tmp/valence.sql'
+docker compose cp db:/tmp/valence.sql .\valence.sql
+docker compose exec -T db rm /tmp/valence.sql
+```
+
+Restore into an empty database:
+
+```sh
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < valence.sql
+```
+
+PowerShell:
+
+```powershell
+docker compose cp .\valence.sql db:/tmp/valence.sql
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" < /tmp/valence.sql'
+docker compose exec -T db rm /tmp/valence.sql
+```
+
+Protect backups as sensitive data, store them encrypted, and periodically verify that they can be restored.
+
+The application image can also be built independently from the repository root:
 
 ```sh
 docker build --platform linux/amd64 -f server/Dockerfile -t valence-server .
 ```
 
-Run:
+The container runs as an unprivileged user. Configure the database variables when running it outside Compose. Use `GET /health` for process liveness and `GET /ready` for database-backed readiness.
 
-```sh
-docker run -p 8081:8081 \
-  -e VALENCE_CHALLENGE_KEY=... -e VALENCE_TOKEN_KEY=... \
-  -e VALENCE_SERVER_CERTIFICATE=... -e VALENCE_CERTIFICATE_KEY=... \
-  valence-server
-```
+## PostgreSQL integration tests
 
-The container runs as an unprivileged user. Use `GET /health` as the readiness probe.
+From `server/`, run `.\gradlew.bat integrationTest` on Windows or `./gradlew integrationTest` on Linux/macOS. Testcontainers starts PostgreSQL 17 and requires a working Docker engine. If Testcontainers cannot connect to Docker Desktop, the task can use an already-running local PostgreSQL 17 instance by setting `VALENCE_TEST_DATABASE_URL`, `VALENCE_TEST_DATABASE_USER`, and `VALENCE_TEST_DATABASE_PASSWORD`. The external database name must end in `_test`; the tests truncate the server tables before each test, so never point these variables at a production or shared database.
 
 ## Behind a reverse proxy
 
@@ -129,5 +174,4 @@ The counters are aggregate. No mailbox ID, key, token, or path appears in them.
 
 ## Limits of the current version
 
-- Accounts and queued messages live in memory, so a restart loses them. PostgreSQL persistence is the next large step.
-- Rate limits, sockets, and counters belong to one process, so run one instance.
+- Mailboxes, keys, and queued messages persist in PostgreSQL. Rate limits, sockets, and counters belong to one process, so run one instance until cross-node fan-out is implemented.

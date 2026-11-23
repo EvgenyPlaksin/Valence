@@ -5,7 +5,7 @@ import java.security.MessageDigest
 class DeliveryKeyAuthenticator(
     private val store: MailboxStore,
 ) {
-    fun authenticate(
+    suspend fun authenticate(
         mailboxId: String,
         deliveryKey: ByteArray,
     ): Mailbox? {

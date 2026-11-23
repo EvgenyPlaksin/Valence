@@ -6,5 +6,5 @@ class InboxPurger(
     private val inbox: InboxStore,
     private val clock: Clock,
 ) {
-    fun purge(): Int = inbox.purgeExpired(clock.millis())
+    suspend fun purge(): Int = inbox.purgeExpired(clock.millis())
 }

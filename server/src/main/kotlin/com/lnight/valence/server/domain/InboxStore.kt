@@ -1,25 +1,25 @@
 package com.lnight.valence.server.domain
 
 interface InboxStore {
-    fun append(
+    suspend fun append(
         mailboxId: String,
         message: NewMessage,
         maxQueued: Int,
     ): AppendResult
 
-    fun messagesAfter(
+    suspend fun messagesAfter(
         mailboxId: String,
         afterServerSeq: Long,
         nowMillis: Long = 0L,
         limit: Int = Int.MAX_VALUE,
     ): List<QueuedMessage>
 
-    fun deleteUpTo(
+    suspend fun deleteUpTo(
         mailboxId: String,
         upToServerSeq: Long,
     )
 
-    fun purgeExpired(nowMillis: Long): Int
+    suspend fun purgeExpired(nowMillis: Long): Int
 
-    fun queueDepth(): Int
+    suspend fun queueDepth(): Int
 }

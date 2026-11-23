@@ -64,6 +64,59 @@ class ServerConfigTest {
     }
 
     @Test
+    fun `database configuration requires a jdbc url and separate credentials`() {
+        val configuration =
+            ServerConfig.databaseConfiguration(
+                mapOf(
+                    ServerConfig.DATABASE_URL_VARIABLE to "jdbc:postgresql://localhost:5432/valence",
+                    ServerConfig.DATABASE_USER_VARIABLE to "valence",
+                    ServerConfig.DATABASE_PASSWORD_VARIABLE to "local-secret",
+                ),
+            )
+
+        assertEquals("jdbc:postgresql://localhost:5432/valence", configuration.url)
+        assertEquals("valence", configuration.username)
+        assertEquals("local-secret", configuration.password)
+        assertEquals(10, configuration.maxConnections)
+        assertEquals(true, configuration.autoMigrate)
+    }
+
+    @Test
+    fun `database connection and migration settings are validated`() {
+        val base =
+            mapOf(
+                ServerConfig.DATABASE_URL_VARIABLE to "jdbc:postgresql://localhost:5432/valence",
+                ServerConfig.DATABASE_USER_VARIABLE to "valence",
+                ServerConfig.DATABASE_PASSWORD_VARIABLE to "local-secret",
+            )
+
+        assertFailsWith<IllegalStateException> { ServerConfig.databaseConfiguration(emptyMap()) }
+        assertFailsWith<IllegalStateException> {
+            ServerConfig.databaseConfiguration(base + (ServerConfig.DATABASE_URL_VARIABLE to "jdbc:h2:mem:test"))
+        }
+        assertFailsWith<IllegalStateException> {
+            ServerConfig.databaseConfiguration(
+                base + (ServerConfig.DATABASE_URL_VARIABLE to "jdbc:postgresql://host/db?password=secret"),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            ServerConfig.databaseConfiguration(base + (ServerConfig.DATABASE_MAX_CONNECTIONS_VARIABLE to "0"))
+        }
+        assertFailsWith<IllegalStateException> {
+            ServerConfig.databaseConfiguration(base + (ServerConfig.DATABASE_AUTO_MIGRATE_VARIABLE to "sometimes"))
+        }
+
+        val configuration =
+            ServerConfig.databaseConfiguration(
+                base +
+                    (ServerConfig.DATABASE_MAX_CONNECTIONS_VARIABLE to "4") +
+                    (ServerConfig.DATABASE_AUTO_MIGRATE_VARIABLE to "false"),
+            )
+        assertEquals(4, configuration.maxConnections)
+        assertEquals(false, configuration.autoMigrate)
+    }
+
+    @Test
     fun `proxy headers are trusted only when explicitly enabled`() {
         assertEquals(false, ServerConfig.trustProxyHeaders(emptyMap()))
         assertEquals(false, ServerConfig.trustProxyHeaders(mapOf(ServerConfig.TRUST_PROXY_HEADERS_VARIABLE to "yes")))

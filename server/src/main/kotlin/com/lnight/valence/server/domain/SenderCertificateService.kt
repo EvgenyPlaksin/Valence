@@ -8,7 +8,7 @@ class SenderCertificateService(
     private val issuer: SenderCertificateIssuer,
     private val clock: Clock,
 ) {
-    fun issue(mailboxId: String): IssuedCertificate? {
+    suspend fun issue(mailboxId: String): IssuedCertificate? {
         val mailbox = store.find(mailboxId) ?: return null
         val expiresAt = clock.millis() + LIFETIME.toMillis()
         return IssuedCertificate(issuer.issue(mailbox.id, mailbox.identityKey, expiresAt), expiresAt)

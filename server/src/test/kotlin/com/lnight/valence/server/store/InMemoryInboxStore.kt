@@ -9,7 +9,7 @@ import java.util.concurrent.ConcurrentHashMap
 class InMemoryInboxStore : InboxStore {
     private val queues = ConcurrentHashMap<String, Queue>()
 
-    override fun append(
+    override suspend fun append(
         mailboxId: String,
         message: NewMessage,
         maxQueued: Int,
@@ -28,7 +28,7 @@ class InMemoryInboxStore : InboxStore {
         }
     }
 
-    override fun messagesAfter(
+    override suspend fun messagesAfter(
         mailboxId: String,
         afterServerSeq: Long,
         nowMillis: Long,
@@ -44,7 +44,7 @@ class InMemoryInboxStore : InboxStore {
         }
     }
 
-    override fun deleteUpTo(
+    override suspend fun deleteUpTo(
         mailboxId: String,
         upToServerSeq: Long,
     ) {
@@ -53,7 +53,7 @@ class InMemoryInboxStore : InboxStore {
         }
     }
 
-    override fun purgeExpired(nowMillis: Long): Int =
+    override suspend fun purgeExpired(nowMillis: Long): Int =
         queues.values.sumOf { queue ->
             synchronized(queue) {
                 val before = queue.messages.size
@@ -62,7 +62,8 @@ class InMemoryInboxStore : InboxStore {
             }
         }
 
-    override fun queueDepth(): Int = queues.values.sumOf { queue -> synchronized(queue) { queue.messages.size } }
+    override suspend fun queueDepth(): Int =
+        queues.values.sumOf { queue -> synchronized(queue) { queue.messages.size } }
 
     private class Queue {
         var lastSeq = 0L

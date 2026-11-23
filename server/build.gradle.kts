@@ -29,6 +29,17 @@ repositories {
     mavenCentral()
 }
 
+val integrationTestSourceSet =
+    sourceSets.create("integrationTest") {
+        compileClasspath += sourceSets.main.get().output
+        runtimeClasspath += sourceSets.main.get().output
+    }
+
+configurations[integrationTestSourceSet.implementationConfigurationName]
+    .extendsFrom(configurations.testImplementation.get())
+configurations[integrationTestSourceSet.runtimeOnlyConfigurationName]
+    .extendsFrom(configurations.testRuntimeOnly.get())
+
 dependencies {
     implementation("com.lnight.valence:protocol")
 
@@ -41,6 +52,10 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.13.0")
     implementation("org.signal:libsignal-server:0.106.2")
+    implementation("org.postgresql:postgresql:42.7.7")
+    implementation("com.zaxxer:HikariCP:6.3.0")
+    implementation("org.flywaydb:flyway-core:11.8.2")
+    implementation("org.flywaydb:flyway-database-postgresql:11.8.2")
 
     implementation("ch.qos.logback:logback-classic:1.6.8")
 
@@ -50,6 +65,9 @@ dependencies {
     testImplementation(testFixtures("com.lnight.valence:protocol"))
     testImplementation(kotlin("test"))
     testImplementation("com.lemonappdev:konsist:0.18.1")
+
+    add("integrationTestImplementation", "org.testcontainers:postgresql:1.21.3")
+    add("integrationTestImplementation", "org.testcontainers:junit-jupiter:1.21.3")
 }
 
 kotlin {
@@ -58,6 +76,16 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.register<Test>("integrationTest") {
+    description = "Runs integration tests against PostgreSQL using Testcontainers"
+    group = "verification"
+    testClassesDirs = integrationTestSourceSet.output.classesDirs
+    classpath = integrationTestSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    outputs.upToDateWhen { false }
+    shouldRunAfter(tasks.test)
 }
 
 spotless {
@@ -85,6 +113,9 @@ val allowedDependencyGroups =
         "ch.qos.logback",
         "com.lnight.valence",
         "org.signal",
+        "org.postgresql",
+        "com.zaxxer",
+        "org.flywaydb",
     )
 
 val productionDependencies =

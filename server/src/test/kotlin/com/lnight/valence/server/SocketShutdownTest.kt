@@ -18,7 +18,7 @@ class SocketShutdownTest {
     private val token = FakeAccessTokens.bearer(RegistrationTestSupport.MAILBOX_ID)
 
     private fun ApplicationTestBuilder.start(): () -> Unit {
-        val store = InMemoryMailboxStore().also { it.create(DeliveryKeyTestSupport.mailbox(), emptyList()) }
+        val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox())
         var stop: () -> Unit = {}
         application {
             module(TestServices.create(store = store))

@@ -28,7 +28,7 @@ class PreKeyRoutesTest {
 
     private fun ApplicationTestBuilder.start(oneTimeCount: Int = 2): InMemoryMailboxStore {
         val keys = (1..oneTimeCount).map { OneTimePreKey(it, ByteArray(33) { 7 }) }
-        val store = InMemoryMailboxStore().also { it.create(DeliveryKeyTestSupport.mailbox(), keys) }
+        val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox(), keys)
         application { module(TestServices.create(store = store)) }
         return store
     }

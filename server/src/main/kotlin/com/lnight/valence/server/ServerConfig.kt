@@ -7,9 +7,15 @@ object ServerConfig {
     const val TOKEN_KEY_VARIABLE = "VALENCE_TOKEN_KEY"
     const val SERVER_CERTIFICATE_VARIABLE = "VALENCE_SERVER_CERTIFICATE"
     const val CERTIFICATE_KEY_VARIABLE = "VALENCE_CERTIFICATE_KEY"
+    const val DATABASE_URL_VARIABLE = "VALENCE_DATABASE_URL"
+    const val DATABASE_USER_VARIABLE = "VALENCE_DATABASE_USER"
+    const val DATABASE_PASSWORD_VARIABLE = "VALENCE_DATABASE_PASSWORD"
+    const val DATABASE_MAX_CONNECTIONS_VARIABLE = "VALENCE_DB_MAX_CONNECTIONS"
+    const val DATABASE_AUTO_MIGRATE_VARIABLE = "VALENCE_DB_AUTO_MIGRATE"
     const val TRUST_PROXY_HEADERS_VARIABLE = "VALENCE_TRUST_PROXY_HEADERS"
     const val METRICS_TOKEN_VARIABLE = "VALENCE_METRICS_TOKEN"
     private const val MINIMUM_METRICS_TOKEN_LENGTH = 16
+    private const val DEFAULT_DATABASE_MAX_CONNECTIONS = 10
 
     fun trustProxyHeaders(environment: Map<String, String> = System.getenv()): Boolean =
         environment[TRUST_PROXY_HEADERS_VARIABLE] == "true"
@@ -38,6 +44,40 @@ object ServerConfig {
     fun certificateKey(environment: Map<String, String> = System.getenv()): ByteArray =
         decode(environment, CERTIFICATE_KEY_VARIABLE)
 
+    fun databaseConfiguration(environment: Map<String, String> = System.getenv()): DatabaseConfiguration {
+        val url = requiredValue(environment, DATABASE_URL_VARIABLE)
+        check(url.startsWith("jdbc:postgresql://") && !url.any(Char::isWhitespace)) {
+            "$DATABASE_URL_VARIABLE must be a PostgreSQL JDBC URL"
+        }
+        check(!DATABASE_CREDENTIAL_PARAMETER.containsMatchIn(url)) {
+            "$DATABASE_URL_VARIABLE must not contain database credentials"
+        }
+        val maxConnections =
+            environment[DATABASE_MAX_CONNECTIONS_VARIABLE]
+                ?.toIntOrNull()
+                ?: if (DATABASE_MAX_CONNECTIONS_VARIABLE in environment) {
+                    error("$DATABASE_MAX_CONNECTIONS_VARIABLE must be a positive integer")
+                } else {
+                    DEFAULT_DATABASE_MAX_CONNECTIONS
+                }
+        check(maxConnections > 0) { "$DATABASE_MAX_CONNECTIONS_VARIABLE must be a positive integer" }
+        val autoMigrate =
+            environment[DATABASE_AUTO_MIGRATE_VARIABLE]?.let { value ->
+                when (value.lowercase()) {
+                    "true" -> true
+                    "false" -> false
+                    else -> error("$DATABASE_AUTO_MIGRATE_VARIABLE must be true or false")
+                }
+            } ?: true
+        return DatabaseConfiguration(
+            url = url,
+            username = requiredValue(environment, DATABASE_USER_VARIABLE),
+            password = requiredValue(environment, DATABASE_PASSWORD_VARIABLE),
+            maxConnections = maxConnections,
+            autoMigrate = autoMigrate,
+        )
+    }
+
     private fun decode(
         environment: Map<String, String>,
         variable: String,
@@ -45,4 +85,11 @@ object ServerConfig {
         val encoded = checkNotNull(environment[variable]) { "$variable is not set" }
         return Base64Url.decode(encoded)
     }
+
+    private fun requiredValue(
+        environment: Map<String, String>,
+        variable: String,
+    ): String = checkNotNull(environment[variable]?.takeIf { it.isNotBlank() }) { "$variable is not set" }
+
+    private val DATABASE_CREDENTIAL_PARAMETER = Regex("(?i)[?&](?:user|password)=")
 }

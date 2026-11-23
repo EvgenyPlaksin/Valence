@@ -8,7 +8,7 @@ class LoginService(
     private val store: MailboxStore,
     private val tokens: AccessTokenIssuer,
 ) {
-    fun login(login: Login): LoginResult {
+    suspend fun login(login: Login): LoginResult {
         val rejection = challengeRejection(login) ?: structureRejection(login) ?: credentialsRejection(login)
         return if (rejection != null) {
             LoginResult.Rejected(rejection)
@@ -31,7 +31,7 @@ class LoginService(
             LoginRejection.MALFORMED
         }
 
-    private fun credentialsRejection(login: Login): LoginRejection? {
+    private suspend fun credentialsRejection(login: Login): LoginRejection? {
         val mailbox = store.find(login.mailboxId) ?: return LoginRejection.INVALID_CREDENTIALS
         val message = SignedMessages.login(login.challenge, login.mailboxId)
         return if (keyVerifier.verifySignature(mailbox.identityKey, message, login.signature)) {
