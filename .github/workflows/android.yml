@@ -36,6 +36,9 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
+      - name: Install Android SDK platform
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/android --no-metrics --sdk="$ANDROID_HOME" sdk install 'platforms;android-37.2'
+
       - name: Check formatting and static analysis
         run: ./gradlew spotlessCheck detekt
 

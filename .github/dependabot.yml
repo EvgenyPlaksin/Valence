@@ -82,3 +82,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build(deps)"
+    ignore:
+      - dependency-name: eclipse-temurin
+        update-types:
+          - "version-update:semver-major"
