@@ -11,6 +11,7 @@ version = "0.1.0-SNAPSHOT"
 
 application {
     mainClass.set("com.lnight.valence.server.ApplicationKt")
+    applicationDefaultJvmArgs = listOf("-XX:MaxRAMPercentage=75.0")
 }
 
 repositories {
@@ -108,9 +109,48 @@ tasks.check {
     dependsOn("spotlessCheck", "detekt", "checkDependencies")
 }
 
-tasks.register<JavaExec>("generateCertificateKeys") {
-    group = "tools"
-    description = "Generates a trust root, a server certificate and a signing key for sender certificates"
-    classpath = sourceSets.main.get().runtimeClasspath
-    mainClass.set("com.lnight.valence.server.crypto.CertificateKeyToolKt")
+fun registerTool(
+    taskName: String,
+    toolClass: String,
+    text: String,
+    argumentProperties: List<String>,
+) {
+    tasks.register<JavaExec>(taskName) {
+        group = "tools"
+        description = text
+        classpath = sourceSets.main.get().runtimeClasspath
+        mainClass.set(toolClass)
+        doFirst {
+            args =
+                argumentProperties.map { property ->
+                    providers.gradleProperty(property).orNull
+                        ?: throw GradleException("Pass -P$property=<value>")
+                }
+        }
+    }
 }
+
+registerTool(
+    "generateTrustRoot",
+    "com.lnight.valence.server.crypto.GenerateTrustRootKt",
+    "Generates a trust root key pair. Pass -PkeyOutputDirectory=<absolute directory outside the repository>",
+    listOf("keyOutputDirectory"),
+)
+registerTool(
+    "generateServerKey",
+    "com.lnight.valence.server.crypto.GenerateServerKeyKt",
+    "Generates a server signing key pair. Pass -PkeyOutputDirectory=<absolute directory outside the repository>",
+    listOf("keyOutputDirectory"),
+)
+registerTool(
+    "signServerCertificate",
+    "com.lnight.valence.server.crypto.SignServerCertificateKt",
+    "Signs a server certificate with VALENCE_TRUST_ROOT_PRIVATE_KEY. Pass -PserverPublicKey=<key> -PkeyId=<id>",
+    listOf("serverPublicKey", "keyId"),
+)
+registerTool(
+    "generateCertificateKeys",
+    "com.lnight.valence.server.crypto.CertificateKeyToolKt",
+    "DEVELOPMENT ONLY: generates a certificate chain. Pass -PkeyOutputDirectory=<absolute directory outside the repository>",
+    listOf("keyOutputDirectory"),
+)

@@ -28,19 +28,27 @@ import kotlinx.coroutines.launch
 private const val MAX_CLIENT_FRAME_BYTES = 4_096
 private const val SUPERSEDED_CLOSE_CODE: Short = 4000
 
+private class Connection(
+    val session: ReceiveSession,
+    val subscription: Subscription,
+    val mapper: MessageDeliverFrameMapper,
+    val metrics: ServerMetrics,
+)
+
 fun Route.socketRoutes(
     receive: ReceiveService,
     subscriptions: MailboxSubscriptions,
     mapper: MessageDeliverFrameMapper,
+    metrics: ServerMetrics,
 ) {
     authenticate(ACCESS_TOKEN_AUTH) {
         webSocket(ProtocolRoutes.SOCKET) {
             val principal =
                 checkNotNull(call.principal<MailboxPrincipal>()) { "Authenticated route without a principal" }
-            val session = receive.open(principal.mailboxId)
             val subscription = subscriptions.subscribe(principal.mailboxId)
+            metrics.increment(MetricNames.SOCKETS_OPENED)
             try {
-                serve(session, subscription, mapper)
+                serve(Connection(receive.open(principal.mailboxId), subscription, mapper, metrics))
             } finally {
                 subscriptions.unsubscribe(principal.mailboxId, subscription)
             }
@@ -48,50 +56,48 @@ fun Route.socketRoutes(
     }
 }
 
-private suspend fun DefaultWebSocketServerSession.serve(
-    session: ReceiveSession,
-    subscription: Subscription,
-    mapper: MessageDeliverFrameMapper,
-) = coroutineScope {
-    val pump = launch { pump(session, subscription, mapper) }
-    val watcher =
-        launch {
-            subscription.superseded.await()
-            close(CloseReason(SUPERSEDED_CLOSE_CODE, "superseded"))
-        }
-    readFrames(session, subscription)
-    pump.cancel()
-    watcher.cancel()
-}
+private suspend fun DefaultWebSocketServerSession.serve(connection: Connection) =
+    coroutineScope {
+        val pump = launch { pump(connection) }
+        val watchers =
+            listOf(
+                launch {
+                    connection.subscription.superseded.await()
+                    close(CloseReason(SUPERSEDED_CLOSE_CODE, "superseded"))
+                },
+                launch {
+                    connection.subscription.shuttingDown.await()
+                    close(CloseReason(CloseReason.Codes.GOING_AWAY, "server shutting down"))
+                },
+            )
+        readFrames(connection)
+        pump.cancel()
+        watchers.forEach { it.cancel() }
+    }
 
-private suspend fun DefaultWebSocketServerSession.pump(
-    session: ReceiveSession,
-    subscription: Subscription,
-    mapper: MessageDeliverFrameMapper,
-) {
-    subscription.wake.consumeEach { _ ->
+private suspend fun DefaultWebSocketServerSession.pump(connection: Connection) {
+    connection.subscription.wake.consumeEach { _ ->
         do {
-            val batch = session.nextBatch()
-            batch.forEach { message -> send(Frame.Text(ProtocolJson.encodeServerFrame(mapper.toFrame(message)))) }
+            val batch = connection.session.nextBatch()
+            connection.metrics.increment(MetricNames.MESSAGES_DELIVERED, by = batch.size.toLong())
+            batch.forEach { message ->
+                send(Frame.Text(ProtocolJson.encodeServerFrame(connection.mapper.toFrame(message))))
+            }
         } while (batch.isNotEmpty())
     }
 }
 
-private suspend fun DefaultWebSocketServerSession.readFrames(
-    session: ReceiveSession,
-    subscription: Subscription,
-) {
+private suspend fun DefaultWebSocketServerSession.readFrames(connection: Connection) {
     for (frame in incoming) {
-        if ((frame is Frame.Text || frame is Frame.Binary) && !process(frame, session, subscription)) return
+        if ((frame is Frame.Text || frame is Frame.Binary) && !process(frame, connection)) return
     }
 }
 
 private suspend fun DefaultWebSocketServerSession.process(
     frame: Frame,
-    session: ReceiveSession,
-    subscription: Subscription,
+    connection: Connection,
 ): Boolean {
-    val decision = session.allowFrame()
+    val decision = connection.session.allowFrame()
     return when {
         decision is RateLimitDecision.Limited -> {
             val error = ErrorFrame(code = ErrorCode.RATE_LIMITED, retryAfterMs = decision.retryAfterMillis)
@@ -100,7 +106,7 @@ private suspend fun DefaultWebSocketServerSession.process(
         }
 
         frame !is Frame.Text -> {
-            rejectFrame()
+            rejectFrame(connection)
             true
         }
 
@@ -110,7 +116,7 @@ private suspend fun DefaultWebSocketServerSession.process(
         }
 
         else -> {
-            handle(frame.readText(), session, subscription)
+            handle(frame.readText(), connection)
             true
         }
     }
@@ -118,28 +124,35 @@ private suspend fun DefaultWebSocketServerSession.process(
 
 private suspend fun DefaultWebSocketServerSession.handle(
     text: String,
-    session: ReceiveSession,
-    subscription: Subscription,
+    connection: Connection,
 ) {
     val accepted =
         when (val frame = Parsing.orNull { ProtocolJson.decodeClientFrame(text) }) {
-            is SyncResumeFrame -> resume(frame, session, subscription)
-            is DeliveryConfirmFrame -> ProtocolVersion.isSupported(frame.v) && session.confirm(frame.upToServerSeq)
-            null -> false
+            is SyncResumeFrame -> {
+                resume(frame, connection)
+            }
+
+            is DeliveryConfirmFrame -> {
+                ProtocolVersion.isSupported(frame.v) && connection.session.confirm(frame.upToServerSeq)
+            }
+
+            null -> {
+                false
+            }
         }
-    if (!accepted) rejectFrame()
+    if (!accepted) rejectFrame(connection)
 }
 
 private fun resume(
     frame: SyncResumeFrame,
-    session: ReceiveSession,
-    subscription: Subscription,
+    connection: Connection,
 ): Boolean {
-    val accepted = ProtocolVersion.isSupported(frame.v) && session.resume(frame.afterServerSeq)
-    if (accepted) subscription.wake.trySend(Unit)
+    val accepted = ProtocolVersion.isSupported(frame.v) && connection.session.resume(frame.afterServerSeq)
+    if (accepted) connection.subscription.wake.trySend(Unit)
     return accepted
 }
 
-private suspend fun DefaultWebSocketServerSession.rejectFrame() {
+private suspend fun DefaultWebSocketServerSession.rejectFrame(connection: Connection) {
+    connection.metrics.increment(MetricNames.INVALID_FRAMES)
     send(Frame.Text(ProtocolJson.encodeServerFrame(ErrorFrame(code = ErrorCode.INVALID_FRAME))))
 }

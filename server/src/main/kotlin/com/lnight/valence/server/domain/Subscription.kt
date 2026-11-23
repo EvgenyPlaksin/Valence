@@ -6,8 +6,13 @@ import kotlinx.coroutines.channels.Channel
 class Subscription {
     val wake = Channel<Unit>(Channel.CONFLATED)
     val superseded = CompletableDeferred<Unit>()
+    val shuttingDown = CompletableDeferred<Unit>()
 
     internal fun supersede() {
         superseded.complete(Unit)
+    }
+
+    internal fun shutDown() {
+        shuttingDown.complete(Unit)
     }
 }

@@ -20,4 +20,6 @@ interface InboxStore {
     )
 
     fun purgeExpired(nowMillis: Long): Int
+
+    fun queueDepth(): Int
 }

@@ -2,6 +2,7 @@ package com.lnight.valence.server
 
 import com.lnight.valence.server.domain.MailboxSubscriptions
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -75,5 +76,27 @@ class MailboxSubscriptionsTest {
     @Test
     fun `a stored message without a subscriber is harmless`() {
         subscriptions.messageStored(id)
+    }
+
+    @Test
+    fun `a shutdown ends every subscription and refuses new ones`() {
+        val existing = subscriptions.subscribe(id)
+
+        subscriptions.shutdown()
+        val late = subscriptions.subscribe(other)
+
+        assertTrue(existing.shuttingDown.isCompleted)
+        assertTrue(late.shuttingDown.isCompleted)
+    }
+
+    @Test
+    fun `the active count follows subscriptions`() {
+        val subscription = subscriptions.subscribe(id)
+        subscriptions.subscribe(other)
+
+        assertEquals(2, subscriptions.activeCount())
+
+        subscriptions.unsubscribe(id, subscription)
+        assertEquals(1, subscriptions.activeCount())
     }
 }

@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 
 class ServerConfigTest {
     @Test
@@ -67,5 +68,18 @@ class ServerConfigTest {
         assertEquals(false, ServerConfig.trustProxyHeaders(emptyMap()))
         assertEquals(false, ServerConfig.trustProxyHeaders(mapOf(ServerConfig.TRUST_PROXY_HEADERS_VARIABLE to "yes")))
         assertEquals(true, ServerConfig.trustProxyHeaders(mapOf(ServerConfig.TRUST_PROXY_HEADERS_VARIABLE to "true")))
+    }
+
+    @Test
+    fun `the metrics token is optional and must be long enough`() {
+        assertNull(ServerConfig.metricsToken(emptyMap()))
+        assertNull(ServerConfig.metricsToken(mapOf(ServerConfig.METRICS_TOKEN_VARIABLE to " ")))
+        assertEquals(
+            "a-long-enough-token",
+            ServerConfig.metricsToken(mapOf(ServerConfig.METRICS_TOKEN_VARIABLE to "a-long-enough-token")),
+        )
+        assertFailsWith<IllegalStateException> {
+            ServerConfig.metricsToken(mapOf(ServerConfig.METRICS_TOKEN_VARIABLE to "short"))
+        }
     }
 }
