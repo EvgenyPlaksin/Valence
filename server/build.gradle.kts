@@ -87,6 +87,7 @@ tasks.register<Test>("integrationTest") {
     testLogging {
         events("failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = true
     }
     outputs.upToDateWhen { false }
     shouldRunAfter(tasks.test)
