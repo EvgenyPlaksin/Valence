@@ -6,7 +6,7 @@ class PreKeyBundleService(
     private val limiter: RateLimiter,
     private val mailboxPolicy: RateLimitPolicy,
 ) {
-    fun fetch(
+    suspend fun fetch(
         mailboxId: String,
         deliveryKey: ByteArray,
     ): BundleResult {

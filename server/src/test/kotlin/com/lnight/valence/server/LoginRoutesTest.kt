@@ -21,7 +21,7 @@ import kotlin.test.assertEquals
 
 class LoginRoutesTest {
     private fun ApplicationTestBuilder.start(verifier: PublicKeyVerifier = FakePublicKeyVerifier()) {
-        val store = InMemoryMailboxStore().also { it.create(RegistrationTestSupport.mailbox(), emptyList()) }
+        val store = InMemoryMailboxStore().seed(RegistrationTestSupport.mailbox())
         application { module(TestServices.create(verifier, store)) }
     }
 

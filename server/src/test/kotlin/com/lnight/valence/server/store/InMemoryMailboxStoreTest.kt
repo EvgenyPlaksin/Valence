@@ -3,8 +3,10 @@ package com.lnight.valence.server.store
 import com.lnight.valence.server.RegistrationTestSupport
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.SignedPublicKey
-import java.util.concurrent.Callable
-import java.util.concurrent.Executors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -24,44 +26,41 @@ class InMemoryMailboxStoreTest {
         )
 
     @Test
-    fun `a new mailbox is created and found`() {
-        val store = InMemoryMailboxStore()
-        val mailbox = mailbox()
+    fun `a new mailbox is created and found`() =
+        runTest {
+            val store = InMemoryMailboxStore()
+            val mailbox = mailbox()
 
-        assertTrue(store.create(mailbox, RegistrationTestSupport.defaultOneTimePreKeys()))
-        assertSame(mailbox, store.find(mailbox.id))
-    }
-
-    @Test
-    fun `an existing mailbox is not replaced`() {
-        val store = InMemoryMailboxStore()
-        val first = mailbox()
-
-        store.create(first, emptyList())
-
-        assertFalse(store.create(mailbox(), emptyList()))
-        assertSame(first, store.find(first.id))
-    }
+            assertTrue(store.create(mailbox, RegistrationTestSupport.defaultOneTimePreKeys()))
+            assertSame(mailbox, store.find(mailbox.id))
+        }
 
     @Test
-    fun `an unknown mailbox is not found`() {
-        assertNull(InMemoryMailboxStore().find(RegistrationTestSupport.MAILBOX_ID))
-    }
+    fun `an existing mailbox is not replaced`() =
+        runTest {
+            val store = InMemoryMailboxStore()
+            val first = mailbox()
+
+            store.create(first, emptyList())
+
+            assertFalse(store.create(mailbox(), emptyList()))
+            assertSame(first, store.find(first.id))
+        }
 
     @Test
-    fun `only one of many concurrent creations wins`() {
-        val store = InMemoryMailboxStore()
-        val executor = Executors.newFixedThreadPool(8)
+    fun `an unknown mailbox is not found`() =
+        runTest {
+            assertNull(InMemoryMailboxStore().find(RegistrationTestSupport.MAILBOX_ID))
+        }
 
-        val results =
-            (1..32)
-                .map {
-                    executor.submit(
-                        Callable { store.create(mailbox(), emptyList()) },
-                    )
-                }.map { it.get() }
-        executor.shutdown()
+    @Test
+    fun `only one of many concurrent creations wins`() =
+        runTest {
+            val store = InMemoryMailboxStore()
 
-        assertEquals(1, results.count { it })
-    }
+            val results =
+                (1..32).map { async(Dispatchers.Default) { store.create(mailbox(), emptyList()) } }.awaitAll()
+
+            assertEquals(1, results.count { it })
+        }
 }

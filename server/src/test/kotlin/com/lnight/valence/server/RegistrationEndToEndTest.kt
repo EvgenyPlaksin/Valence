@@ -8,6 +8,7 @@ import com.lnight.valence.server.domain.Registration
 import com.lnight.valence.server.domain.RegistrationRejection
 import com.lnight.valence.server.domain.RegistrationResult
 import com.lnight.valence.server.domain.SignedPublicKey
+import kotlinx.coroutines.test.runTest
 import org.signal.libsignal.protocol.ecc.ECKeyPair
 import org.signal.libsignal.protocol.kem.KEMKeyPair
 import org.signal.libsignal.protocol.kem.KEMKeyType
@@ -49,28 +50,32 @@ class RegistrationEndToEndTest {
     }
 
     @Test
-    fun `a registration signed with real keys is accepted`() {
-        assertIs<RegistrationResult.Registered>(service.register(registration()))
-    }
+    fun `a registration signed with real keys is accepted`() =
+        runTest {
+            assertIs<RegistrationResult.Registered>(service.register(registration()))
+        }
 
     @Test
-    fun `a proof signed for another mailbox is rejected`() {
-        val result = service.register(registration(signedMailboxId = "mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa"))
+    fun `a proof signed for another mailbox is rejected`() =
+        runTest {
+            val result = service.register(registration(signedMailboxId = "mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa"))
 
-        assertEquals(RegistrationResult.Rejected(RegistrationRejection.INVALID_PROOF), result)
-    }
-
-    @Test
-    fun `a login signature is not accepted as a registration proof`() {
-        val result = service.register(registration(proofIsLoginMessage = true))
-
-        assertEquals(RegistrationResult.Rejected(RegistrationRejection.INVALID_PROOF), result)
-    }
+            assertEquals(RegistrationResult.Rejected(RegistrationRejection.INVALID_PROOF), result)
+        }
 
     @Test
-    fun `prekeys signed by another identity are rejected`() {
-        val result = service.register(registration(preKeySigner = ECKeyPair.generate()))
+    fun `a login signature is not accepted as a registration proof`() =
+        runTest {
+            val result = service.register(registration(proofIsLoginMessage = true))
 
-        assertEquals(RegistrationResult.Rejected(RegistrationRejection.INVALID_PREKEY_SIGNATURE), result)
-    }
+            assertEquals(RegistrationResult.Rejected(RegistrationRejection.INVALID_PROOF), result)
+        }
+
+    @Test
+    fun `prekeys signed by another identity are rejected`() =
+        runTest {
+            val result = service.register(registration(preKeySigner = ECKeyPair.generate()))
+
+            assertEquals(RegistrationResult.Rejected(RegistrationRejection.INVALID_PREKEY_SIGNATURE), result)
+        }
 }

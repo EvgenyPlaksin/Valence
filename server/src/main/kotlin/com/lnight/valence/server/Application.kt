@@ -42,8 +42,7 @@ import com.lnight.valence.server.routes.preKeyRoutes
 import com.lnight.valence.server.routes.registrationRoutes
 import com.lnight.valence.server.routes.senderCertificateRoutes
 import com.lnight.valence.server.routes.socketRoutes
-import com.lnight.valence.server.store.InMemoryInboxStore
-import com.lnight.valence.server.store.InMemoryMailboxStore
+import com.lnight.valence.server.store.PostgresDatabase
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopPreparing
@@ -69,13 +68,18 @@ private const val MAX_WEBSOCKET_FRAME_BYTES = 131_072L
 private const val PURGE_INTERVAL_MINUTES = 5L
 
 fun main() {
-    val port = System.getenv("PORT")?.toIntOrNull() ?: DEFAULT_PORT
-    val services = createServices()
-    embeddedServer(Netty, port = port, host = "0.0.0.0") { module(services) }
-        .start(wait = true)
+    val database = PostgresDatabase.open(ServerConfig.databaseConfiguration())
+    try {
+        val port = System.getenv("PORT")?.toIntOrNull() ?: DEFAULT_PORT
+        val services = createServices(database)
+        embeddedServer(Netty, port = port, host = "0.0.0.0") { module(services) }
+            .start(wait = true)
+    } finally {
+        database.close()
+    }
 }
 
-private fun createServices(): ServerServices {
+private fun createServices(database: PostgresDatabase): ServerServices {
     val clock = Clock.systemUTC()
     val policies = RateLimitPolicies()
     val limiter = TokenBucketRateLimiter(clock)
@@ -86,8 +90,8 @@ private fun createServices(): ServerServices {
             authenticator = HmacChallengeAuthenticator(ServerConfig.challengeKey()),
         )
     val keyVerifier = LibsignalPublicKeyVerifier()
-    val store = InMemoryMailboxStore()
-    val inbox = InMemoryInboxStore()
+    val store = database.mailboxStore
+    val inbox = database.inboxStore
     val subscriptions = MailboxSubscriptions()
     val authenticator = DeliveryKeyAuthenticator(store)
     val tokenKey = ServerConfig.tokenKey()
@@ -112,6 +116,7 @@ private fun createServices(): ServerServices {
         inbox = inbox,
         metrics = ServerMetrics(),
         metricsToken = ServerConfig.metricsToken(),
+        databaseReady = database::isReady,
     )
 }
 
@@ -140,6 +145,13 @@ fun Application.module(services: ServerServices) {
     routing {
         get("/health") {
             call.respond(HealthResponse())
+        }
+        get("/ready") {
+            if (services.databaseReady()) {
+                call.respond(HealthResponse())
+            } else {
+                call.respond(io.ktor.http.HttpStatusCode.ServiceUnavailable)
+            }
         }
         authRoutes(services.challenges)
         registrationRoutes(services.registration, RegisterRequestMapper())

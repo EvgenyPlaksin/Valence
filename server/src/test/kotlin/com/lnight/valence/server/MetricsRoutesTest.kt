@@ -46,8 +46,10 @@ class MetricsRoutesTest {
         messages: Int = 0,
     ) {
         val inbox = InMemoryInboxStore()
-        (1..messages).forEach { inbox.append(id, NewMessage(byteArrayOf(it.toByte()), now, now + 60_000L), 1_000) }
-        val store = InMemoryMailboxStore().also { it.create(DeliveryKeyTestSupport.mailbox(), emptyList()) }
+        kotlinx.coroutines.runBlocking {
+            (1..messages).forEach { inbox.append(id, NewMessage(byteArrayOf(it.toByte()), now, now + 60_000L), 1_000) }
+        }
+        val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox())
         application {
             module(TestServices.create(store = store, inbox = inbox, policies = generous, metricsToken = metricsToken))
         }

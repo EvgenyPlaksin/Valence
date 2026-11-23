@@ -15,7 +15,7 @@ private const val BEARER_PREFIX = "Bearer "
 fun Route.metricsRoutes(
     metrics: ServerMetrics,
     token: String?,
-    gauges: () -> Map<String, Long>,
+    gauges: suspend () -> Map<String, Long>,
 ) {
     if (token != null) {
         val expected = token.toByteArray(Charsets.UTF_8)

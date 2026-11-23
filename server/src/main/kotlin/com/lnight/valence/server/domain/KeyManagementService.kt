@@ -6,9 +6,9 @@ class KeyManagementService(
 ) {
     private val validator = PreKeyValidator(keyVerifier)
 
-    fun status(mailboxId: String): Int? = store.oneTimePreKeyCount(mailboxId)
+    suspend fun status(mailboxId: String): Int? = store.oneTimePreKeyCount(mailboxId)
 
-    fun replaceSignedPreKeys(
+    suspend fun replaceSignedPreKeys(
         mailboxId: String,
         replacement: PreKeyReplacement,
     ): KeyUpdateResult {
@@ -24,7 +24,7 @@ class KeyManagementService(
         }
     }
 
-    fun uploadOneTimePreKeys(
+    suspend fun uploadOneTimePreKeys(
         mailboxId: String,
         keys: List<OneTimePreKey>,
     ): KeyUpdateResult =
@@ -53,7 +53,7 @@ class KeyManagementService(
         key: SignedPublicKey,
     ): Boolean = keyVerifier.verifySignature(identityKey, key.publicKey, key.signature)
 
-    private fun resultOf(
+    private suspend fun resultOf(
         mailboxId: String,
         outcome: KeyStoreOutcome,
     ): KeyUpdateResult =

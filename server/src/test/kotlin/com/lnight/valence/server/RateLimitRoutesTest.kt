@@ -36,9 +36,10 @@ class RateLimitRoutesTest {
         inbox: InMemoryInboxStore = InMemoryInboxStore(),
     ) {
         val store =
-            InMemoryMailboxStore().also {
-                it.create(DeliveryKeyTestSupport.mailbox(), RegistrationTestSupport.defaultOneTimePreKeys())
-            }
+            InMemoryMailboxStore().seed(
+                DeliveryKeyTestSupport.mailbox(),
+                RegistrationTestSupport.defaultOneTimePreKeys(),
+            )
         application {
             module(
                 TestServices.create(

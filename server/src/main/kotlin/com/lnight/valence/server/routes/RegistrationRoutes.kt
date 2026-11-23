@@ -27,7 +27,7 @@ fun Route.registrationRoutes(
                 ?.takeIf { ProtocolVersion.isSupported(it.v) }
                 ?.let(mapper::toDomain)
         val result =
-            registration?.let(service::register) ?: RegistrationResult.Rejected(RegistrationRejection.MALFORMED)
+            registration?.let { service.register(it) } ?: RegistrationResult.Rejected(RegistrationRejection.MALFORMED)
         call.respondWith(result)
     }
 }

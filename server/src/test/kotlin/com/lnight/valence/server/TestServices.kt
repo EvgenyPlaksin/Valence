@@ -19,9 +19,15 @@ import com.lnight.valence.server.domain.TokenBucketRateLimiter
 import com.lnight.valence.server.routes.ServerMetrics
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
+import kotlinx.coroutines.runBlocking
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+
+internal fun InMemoryMailboxStore.seed(
+    mailbox: com.lnight.valence.server.domain.Mailbox,
+    keys: List<com.lnight.valence.server.domain.OneTimePreKey> = emptyList(),
+): InMemoryMailboxStore = apply { runBlocking { create(mailbox, keys) } }
 
 internal object FakeAccessTokens {
     private const val PREFIX = "token-for-"

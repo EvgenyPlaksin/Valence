@@ -16,7 +16,7 @@ class LoginEndToEndTest {
     private val identity = ECKeyPair.generate()
     private val identityPublic = identity.publicKey.serialize()
     private val store =
-        InMemoryMailboxStore().also { it.create(RegistrationTestSupport.mailbox(identityPublic), emptyList()) }
+        InMemoryMailboxStore().seed(RegistrationTestSupport.mailbox(identityPublic))
     private val service = LoginTestSupport.service(verifier = LibsignalPublicKeyVerifier(), store = store)
 
     private fun login(
@@ -30,29 +30,33 @@ class LoginEndToEndTest {
     private fun invalidCredentials() = LoginResult.Rejected(LoginRejection.INVALID_CREDENTIALS)
 
     @Test
-    fun `a login signed with the identity key is accepted`() {
-        assertIs<LoginResult.LoggedIn>(service.login(login()))
-    }
+    fun `a login signed with the identity key is accepted`() =
+        kotlinx.coroutines.runBlocking {
+            assertIs<LoginResult.LoggedIn>(service.login(login()))
+        }
 
     @Test
-    fun `a login signed by another key is rejected`() {
-        assertEquals(invalidCredentials(), service.login(login(signer = ECKeyPair.generate())))
-    }
+    fun `a login signed by another key is rejected`() =
+        kotlinx.coroutines.runBlocking {
+            assertEquals(invalidCredentials(), service.login(login(signer = ECKeyPair.generate())))
+        }
 
     @Test
-    fun `a login signed for another mailbox is rejected`() {
-        val result = service.login(login(message = { SignedMessages.login(it, "mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa") }))
+    fun `a login signed for another mailbox is rejected`() =
+        kotlinx.coroutines.runBlocking {
+            val result = service.login(login(message = { SignedMessages.login(it, "mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa") }))
 
-        assertEquals(invalidCredentials(), result)
-    }
+            assertEquals(invalidCredentials(), result)
+        }
 
     @Test
-    fun `a registration proof is not accepted as a login signature`() {
-        val result =
-            service.login(
-                login(message = { SignedMessages.register(it, MAILBOX_ID, identityPublic, ByteArray(32) { 9 }) }),
-            )
+    fun `a registration proof is not accepted as a login signature`() =
+        kotlinx.coroutines.runBlocking {
+            val result =
+                service.login(
+                    login(message = { SignedMessages.register(it, MAILBOX_ID, identityPublic, ByteArray(32) { 9 }) }),
+                )
 
-        assertEquals(invalidCredentials(), result)
-    }
+            assertEquals(invalidCredentials(), result)
+        }
 }

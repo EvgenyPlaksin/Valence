@@ -19,7 +19,7 @@ class SenderCertificateRoutesTest {
     private val id = RegistrationTestSupport.MAILBOX_ID
 
     private fun ApplicationTestBuilder.start() {
-        val store = InMemoryMailboxStore().also { it.create(RegistrationTestSupport.mailbox(), emptyList()) }
+        val store = InMemoryMailboxStore().seed(RegistrationTestSupport.mailbox())
         application { module(TestServices.create(store = store)) }
     }
 

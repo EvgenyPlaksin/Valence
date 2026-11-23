@@ -38,7 +38,7 @@ class KeyRoutesTest {
         oneTimeCount: Int = 2,
     ): InMemoryMailboxStore {
         val keys = (1..oneTimeCount).map { OneTimePreKey(it, ByteArray(33) { 7 }) }
-        val store = InMemoryMailboxStore().also { it.create(RegistrationTestSupport.mailbox(), keys) }
+        val store = InMemoryMailboxStore().seed(RegistrationTestSupport.mailbox(), keys)
         application { module(TestServices.create(verifier, store)) }
         return store
     }

@@ -34,4 +34,5 @@ data class ServerServices(
     val inbox: InboxStore,
     val metrics: ServerMetrics,
     val metricsToken: String?,
+    val databaseReady: suspend () -> Boolean = { true },
 )

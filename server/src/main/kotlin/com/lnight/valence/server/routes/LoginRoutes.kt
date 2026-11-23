@@ -26,7 +26,7 @@ fun Route.loginRoutes(
                 .orNull { ProtocolJson.json.decodeFromString(AuthTokenRequest.serializer(), body) }
                 ?.takeIf { ProtocolVersion.isSupported(it.v) }
                 ?.let(mapper::toDomain)
-        val result = login?.let(service::login) ?: LoginResult.Rejected(LoginRejection.MALFORMED)
+        val result = login?.let { service.login(it) } ?: LoginResult.Rejected(LoginRejection.MALFORMED)
         call.respondWith(result)
     }
 }

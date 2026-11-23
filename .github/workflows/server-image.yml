@@ -7,6 +7,8 @@ on:
       - "server/**"
       - "protocol/**"
       - ".dockerignore"
+      - ".env.example"
+      - "compose.yaml"
       - ".github/workflows/server-image.yml"
   push:
     branches: [main]
@@ -14,6 +16,8 @@ on:
       - "server/**"
       - "protocol/**"
       - ".dockerignore"
+      - ".env.example"
+      - "compose.yaml"
       - ".github/workflows/server-image.yml"
 
 concurrency:
@@ -29,6 +33,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+
+      - name: Run server checks and PostgreSQL integration tests
+        working-directory: server
+        run: ./gradlew --no-daemon check integrationTest
 
       - name: Build the image
         run: docker build --platform linux/amd64 -f server/Dockerfile -t valence-server .
