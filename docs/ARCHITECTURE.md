@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.14 |
+| **Status** | Draft v1.15 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -811,7 +811,7 @@ The append to durable storage **precedes** any live delivery. Live push is an op
 | Rate limiting | In-memory token buckets (see below). A limited HTTP request answers `429` with `Retry-After` in whole seconds, and a limited WebSocket frame answers an `error` frame with `RATE_LIMITED` and `retryAfterMs` |
 | Idle detection | Ping every 20 s, close after 2 missed pongs |
 | Per-node capacity | Sized by file descriptors and heap; target 50k–100k idle sockets per node on Netty with `-Xss` tuned down |
-| Graceful shutdown | Stop accepting, send close 1001, drain writers, then terminate |
+| Graceful shutdown | When the application starts to stop, every open socket is closed with code 1001 and new sockets are refused with the same code. The engine then stops accepting connections and finishes in-flight requests within its grace period. Clients reconnect and resume from their cursor |
 
 **Rate limits.** The limiter is a token bucket per key, held in memory behind a port so that a shared store can replace it. A bucket holds `burst` tokens and refills at `refill` tokens per second. The defaults are configurable in code:
 
@@ -972,13 +972,15 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - The Gradle task `checkModuleGraph` verifies the module-level rules of section 2.3 against the actual dependency model of the build.
 - Konsist tests verify source-level rules: imports in `..domain..` packages follow rule 7, libsignal is imported only inside `:core:crypto`, no feature imports another feature's `impl` packages, `api` packages import no `impl` packages, ViewModels do not import data-layer packages, use cases reside in `domain` packages and expose a single public `operator fun invoke`, mappers are injected classes, and field injection is limited to Android entry points.
 
-**Observability.** The server emits only aggregate counters (connections, enqueue rate, queue depth, error codes). No identifiers or payload fields are logged. Client logging is compiled out in release builds for all `:core:crypto` and `:core:data` packages.
+**Observability.** The server emits only aggregate counters (connections, enqueue rate, queue depth, error codes). No identifiers or payload fields are logged. The counters are HTTP responses by scope (`challenge`, `register`, `login`, `bundle`, `send`, `keys`, `certificate`, `socket`, `health`, `metrics`, `other`) and status code, socket connections opened, messages handed to sockets, invalid frames, and messages purged, plus the gauges queue depth and active connections. The scopes are a fixed list, so the cardinality is bounded and no path, mailbox ID, key, or token ever appears. `GET /metrics` exposes them in the Prometheus text format. It exists only when `VALENCE_METRICS_TOKEN` is set, and it requires that token as a bearer token. Client logging is compiled out in release builds for all `:core:crypto` and `:core:data` packages.
 
 **Versioning and migration.** Wire bodies carry `v`. The server supports N and N-1. Room schemas are exported and every migration is covered by `MigrationTestHelper`. Session records carry `record_version` for forward-compatible deserialisation.
 
 **Supply chain.** Dependencies are pinned through a version catalog with verification metadata enabled. Release builds are reproducible. libsignal is the highest-risk dependency: it is pinned to an exact version, its native libraries are verified, desktop native libraries are excluded from the APK, and upgrades happen only through a reviewed pull request that includes a reading of its changelog. libsignal is published for Signal's own use and its use outside Signal is not supported upstream. Valence contains that risk by confining it behind the `:core:crypto` interfaces.
 
 **libsignal distribution.** libsignal is taken only from Signal's own Maven repository, `https://build-artifacts.signal.org/libraries/maven/`, because Maven Central ends at version 0.86.5 (November 2025). The build restricts that repository to the `org.signal` group, and third-party republications of libsignal are never used. The official `libsignal-client` and `libsignal-server` artifacts bundle native libraries for x86_64 Debian-flavoured Linux, Windows x86_64, and macOS (x86_64 and arm64). The server therefore runs on x86_64 glibc Linux, not on Alpine and not on ARM64, unless libsignal is built from source. The server pins `org.signal:libsignal-server` 0.106.0.
+
+**Deployment.** The server runs on x86_64 Linux with glibc, as libsignal requires, in a container built from `server/Dockerfile` with the repository root as the build context. Configuration is by environment variables: `PORT`, `VALENCE_CHALLENGE_KEY`, `VALENCE_TOKEN_KEY`, `VALENCE_SERVER_CERTIFICATE`, `VALENCE_CERTIFICATE_KEY`, and optionally `VALENCE_TRUST_PROXY_HEADERS` and `VALENCE_METRICS_TOKEN`. The key ceremony has three commands, `generateTrustRoot`, `generateServerKey`, and `signServerCertificate`, so that the trust root private key is only ever used on an offline machine. A fourth command, `generateCertificateKeys`, prints every key at once for development and must not be used for production. A continuous integration job builds the image and checks that the container starts, loads libsignal, and answers its health, challenge, and authentication endpoints. `docs/OPERATIONS.md` is the runbook.
 
 **Licensing.** libsignal is licensed under AGPL-3.0. Valence must therefore be distributed under AGPL-3.0 or a licence that is compatible with it for the combined work. The server component that links libsignal falls under AGPL's network-use clause, which is satisfied by publishing its source. See section 6.
 
@@ -1121,3 +1123,9 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - Expired messages are purged by a background job every 5 minutes.
 - The server domain layer may use `ConcurrentHashMap`.
 - The one-time prekey drain is mitigated by a per-recipient fetch limit.
+
+## Appendix P: Changes from v1.14
+
+- Graceful shutdown is specified as closing every socket with code 1001 when the application starts to stop, and refusing new sockets with the same code.
+- The observability counters and gauges are enumerated, with a fixed scope list so that no identifiers can appear, and the token protected `GET /metrics` endpoint is specified.
+- The deployment requirements, the configuration variables, and the three production key ceremony commands are recorded, with a development only shortcut, and a continuous integration job that builds and smoke tests the container image.
