@@ -67,7 +67,7 @@ dependencies {
     testImplementation("com.lemonappdev:konsist:0.18.1")
 
     add("integrationTestImplementation", "org.testcontainers:postgresql:1.21.3")
-    add("integrationTestImplementation", "org.testcontainers:junit-jupiter:1.21.3")
+    add("integrationTestImplementation", "org.testcontainers:junit-jupiter:1.21.4")
 }
 
 kotlin {
