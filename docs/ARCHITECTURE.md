@@ -582,19 +582,25 @@ CREATE TABLE mailbox (
     kyber_prekey       BYTEA       NOT NULL,
     kyber_prekey_sig   BYTEA       NOT NULL,
     delivery_key_hash  BYTEA       NOT NULL,
+    next_server_seq    BIGINT      NOT NULL DEFAULT 0,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE one_time_prekey (
-    mailbox_id TEXT    NOT NULL REFERENCES mailbox(mailbox_id) ON DELETE CASCADE,
-    prekey_id  INTEGER NOT NULL,
-    public_key BYTEA   NOT NULL,
-    PRIMARY KEY (mailbox_id, prekey_id)
+    prekey_sequence BIGINT GENERATED ALWAYS AS IDENTITY,
+    mailbox_id      TEXT    NOT NULL REFERENCES mailbox(mailbox_id) ON DELETE CASCADE,
+    prekey_id       INTEGER NOT NULL,
+    public_key      BYTEA   NOT NULL,
+    PRIMARY KEY (mailbox_id, prekey_id),
+    UNIQUE (mailbox_id, prekey_sequence)
 );
+
+CREATE INDEX idx_one_time_prekey_fifo ON one_time_prekey (mailbox_id, prekey_sequence ASC);
 
 CREATE TABLE inbox_message (
     mailbox_id TEXT        NOT NULL REFERENCES mailbox(mailbox_id) ON DELETE CASCADE,
-    server_seq BIGINT      NOT NULL,
+    server_seq BIGINT      NOT NULL CHECK (server_seq > 0),
+    server_ts  TIMESTAMPTZ NOT NULL,
     envelope   BYTEA       NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (mailbox_id, server_seq)
@@ -603,7 +609,7 @@ CREATE TABLE inbox_message (
 CREATE INDEX idx_inbox_expiry ON inbox_message (expires_at);
 ```
 
-`envelope` is stored as received. There is no sender column, no plaintext index, and no message-level analytics table. The sender-certificate signing key is held in the server's secret store and never in this database.
+`envelope` is stored as received. There is no sender column, no plaintext index, and no message-level analytics table. The sender-certificate signing key is held in the server's secret store and never in this database. `next_server_seq` provides a durable, monotonic per-mailbox sequence counter. `prekey_sequence` preserves exact FIFO drain ordering across repeated one-time prekey batch uploads independently of client-assigned IDs.
 
 ### 3.3 Android Local Schema (Room over SQLCipher)
 
@@ -835,7 +841,16 @@ The health endpoint is never limited. A recipient mailbox bucket is charged only
 
 **Resume protocol.** On connect the client sends `sync.resume { afterServerSeq }`. Until then the server pushes nothing. The server then replays the inbox in ordered batches of up to 100 and keeps delivering new messages through the same pump, so a message that arrives during replay is read in order by the next read. A second `sync.resume` on the same connection is an invalid frame. A `delivery.confirm` is clamped to the highest sequence number the server has sent on the connection, so a client cannot delete messages it has not been sent.
 
-**Persistence concurrency.** `InboxStore.append` uses a per-mailbox sequence (`INSERT ... RETURNING` against a counter row, or a Redis `INCR`) so `serverSeq` is strictly monotonic per mailbox. Database access runs on a bounded `Dispatchers.IO.limitedParallelism(n)` view sized to the connection pool, preventing thread starvation under burst.
+**Persistence concurrency and transactions.** `MailboxStore` and `InboxStore` are `suspend` interfaces. Database operations execute on a dedicated bounded dispatcher (`Dispatchers.IO.limitedParallelism(n)`) sized 1:1 to match the HikariCP connection pool size (`VALENCE_DB_MAX_CONNECTIONS`, default 10). This prevents thread starvation and ensures Ktor coroutines suspend cleanly under burst load.
+
+- **Atomic send and sequencing.** Enqueueing a message (`POST /v1/messages/{to}`) executes within a single read-committed transaction:
+  1. The mailbox row is locked using `SELECT next_server_seq FROM mailbox WHERE mailbox_id = ? FOR UPDATE`.
+  2. Active (unexpired) messages for the mailbox are counted. If the count reaches 1,000, the transaction returns quota exceeded (`429`) without advancing the counter.
+  3. If within quota, `next_server_seq` is incremented by 1, and the envelope is inserted into `inbox_message` with `server_seq = next_server_seq` and `server_ts`. Both updates commit atomically.
+- **Atomic one-time prekey drain.** Fetching a prekey bundle selects and deletes the lowest `prekey_sequence` for the target mailbox in a single transaction:
+  `DELETE FROM one_time_prekey WHERE (mailbox_id, prekey_sequence) = (SELECT mailbox_id, prekey_sequence FROM one_time_prekey WHERE mailbox_id = ? ORDER BY prekey_sequence ASC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING prekey_id, public_key;`
+  This guarantees that concurrent bundle fetches never dispatch or exhaust the same prekey twice.
+- **Atomic key replacement.** `PUT /v1/keys/signed` replaces the signed and Kyber prekeys together within a single transaction against the `mailbox` row.
 
 ### 4.2 Android Client: Pipeline Overview
 
@@ -964,7 +979,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 
 - `:core:crypto` integration tests run two in-memory parties through the full flow: registration bundle, session establishment, sealed round trip, out-of-order delivery, replay rejection, and identity change. Cryptographic correctness itself is libsignal's responsibility and is covered by its own test suite. Valence's tests verify that it is wired correctly.
 - `:core:data` pipeline tests use virtual time to verify ordering, idempotency, and rollback.
-- Server tests run in-memory with `testApplication` plus a WebSocket client.
+- Server tests run fast in-memory unit tests with `testApplication` and store fakes via `:server:test`. A dedicated `:server:integrationTest` task runs PostgreSQL integration tests against PostgreSQL 17 using Testcontainers.
 - Contract tests on both `android/` and `server/` read the golden JSON fixtures from `protocol/` and fail if either side cannot parse or reproduce them.
 
 **Architecture enforcement.** Two mechanisms run in CI:
@@ -980,7 +995,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 
 **libsignal distribution.** libsignal is taken only from Signal's own Maven repository, `https://build-artifacts.signal.org/libraries/maven/`, because Maven Central ends at version 0.86.5 (November 2025). The build restricts that repository to the `org.signal` group, and third-party republications of libsignal are never used. The official `libsignal-client` and `libsignal-server` artifacts bundle native libraries for x86_64 Debian-flavoured Linux, Windows x86_64, and macOS (x86_64 and arm64). The server therefore runs on x86_64 glibc Linux, not on Alpine and not on ARM64, unless libsignal is built from source. The server pins `org.signal:libsignal-server` 0.106.0.
 
-**Deployment.** The server runs on x86_64 Linux with glibc, as libsignal requires, in a container built from `server/Dockerfile` with the repository root as the build context. Configuration is by environment variables: `PORT`, `VALENCE_CHALLENGE_KEY`, `VALENCE_TOKEN_KEY`, `VALENCE_SERVER_CERTIFICATE`, `VALENCE_CERTIFICATE_KEY`, and optionally `VALENCE_TRUST_PROXY_HEADERS` and `VALENCE_METRICS_TOKEN`. The key ceremony has three commands, `generateTrustRoot`, `generateServerKey`, and `signServerCertificate`, so that the trust root private key is only ever used on an offline machine. A fourth command, `generateCertificateKeys`, prints every key at once for development and must not be used for production. A continuous integration job builds the image and checks that the container starts, loads libsignal, and answers its health, challenge, and authentication endpoints. `docs/OPERATIONS.md` is the runbook.
+**Deployment.** The server runs on x86_64 Linux with glibc, as libsignal requires, in a container built from `server/Dockerfile` with the repository root as the build context. Configuration is by environment variables: `PORT`, `VALENCE_DATABASE_URL`, `VALENCE_DATABASE_USER`, `VALENCE_DATABASE_PASSWORD`, `VALENCE_DB_MAX_CONNECTIONS` (default 10), `VALENCE_DB_AUTO_MIGRATE` (default true), `VALENCE_CHALLENGE_KEY`, `VALENCE_TOKEN_KEY`, `VALENCE_SERVER_CERTIFICATE`, `VALENCE_CERTIFICATE_KEY`, and optionally `VALENCE_TRUST_PROXY_HEADERS` and `VALENCE_METRICS_TOKEN`. At startup, the server validates database connectivity and runs Flyway migrations automatically unless `VALENCE_DB_AUTO_MIGRATE=false`. The health endpoint (`/health`) reports process liveness; the readiness endpoint (`/ready`) validates database connectivity. The key ceremony has three commands, `generateTrustRoot`, `generateServerKey`, and `signServerCertificate`, so that the trust root private key is only ever used on an offline machine. A fourth command, `generateCertificateKeys`, prints every key at once for development and must not be used for production. A continuous integration job builds the image and checks that the container starts, loads libsignal, and answers its health, readiness, challenge, and authentication endpoints. `docs/OPERATIONS.md` is the runbook.
 
 **Licensing.** libsignal is licensed under AGPL-3.0. Valence must therefore be distributed under AGPL-3.0 or a licence that is compatible with it for the combined work. The server component that links libsignal falls under AGPL's network-use clause, which is satisfied by publishing its source. See section 6.
 
@@ -998,7 +1013,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Delivery key rotation | How a leaked key is replaced and redistributed | Rotation sends the new key to every contact in an encrypted message. Specify the retry behaviour for contacts that are offline. |
 | Multi-device | Per-device sessions (Signal model) vs. single device | Single device in v1 (a fixed device id); schema keyed by `contact_id` extends to `(contact_id, device_id)` |
 | Group messaging | Pairwise fan-out vs. sender keys | Out of scope for v1; libsignal provides sender keys for a later version |
-| Inbox store | PostgreSQL vs. Redis Streams | PostgreSQL for durability; Redis for fan-out signalling only |
+| Inbox store | PostgreSQL vs. Redis Streams | **Decided: PostgreSQL 17.** PostgreSQL with HikariCP and Flyway serves as the durable store for mailboxes, keys, and inboxes; Redis is reserved for cross-node fan-out signalling only. |
 | Attachments | Encrypted blob store with client-held keys | Separate spec; the message plaintext carries only the blob reference and key |
 | Registration abuse control | How to limit mass registration | Per-IP rate limits first. Proof-of-work can be added later because the challenge format can carry a puzzle. |
 | One-time prekey drain | A holder of a delivery key can exhaust a mailbox's one-time prekeys by fetching bundles repeatedly | Mitigated by a per-recipient limit on bundle fetches, 10 burst and one every 10 seconds (see 4.1), but not eliminated. The bundle degrades gracefully to the signed and Kyber prekeys when the one-time prekeys run out. |
