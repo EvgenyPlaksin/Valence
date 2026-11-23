@@ -1,23 +1,33 @@
 package com.lnight.valence.server.crypto
 
-import com.lnight.valence.protocol.Base64Url
-import com.lnight.valence.server.ServerConfig
-import org.signal.libsignal.protocol.ecc.ECKeyPair
-
 private const val SERVER_KEY_ID = 1
 
-fun main() {
-    val trustRoot = ECKeyPair.generate()
-    val serverKey = ECKeyPair.generate()
-    val serverCertificate =
-        CertificateAuthority()
-            .createServerCertificate(trustRoot.privateKey.serialize(), SERVER_KEY_ID, serverKey.publicKey.serialize())
+@JvmName("main")
+fun generateCertificateKeys(args: Array<String>) {
+    val outputDirectory = keyOutputDirectory(args)
+    val ceremony = KeyCeremony()
+    val trustRoot = ceremony.generateKeyPair()
+    val serverKey = ceremony.generateKeyPair()
+    val serverCertificate = ceremony.signServerCertificate(trustRoot.privateKey, serverKey.publicKey, SERVER_KEY_ID)
 
-    println("Pin this trust root public key in the app:")
-    println("  ${Base64Url.encode(trustRoot.publicKey.serialize())}")
-    println("Keep this trust root private key OFFLINE. It must never reach the server:")
-    println("  ${Base64Url.encode(trustRoot.privateKey.serialize())}")
-    println("Server configuration:")
-    println("  ${ServerConfig.SERVER_CERTIFICATE_VARIABLE}=${Base64Url.encode(serverCertificate)}")
-    println("  ${ServerConfig.CERTIFICATE_KEY_VARIABLE}=${Base64Url.encode(serverKey.privateKey.serialize())}")
+    val trustRootFile = PrivateKeyFiles.write(outputDirectory, "trust-root-private.key", trustRoot.privateKey)
+    val serverKeyFile = PrivateKeyFiles.write(outputDirectory, "server-signing-private.key", serverKey.privateKey)
+    val certificateFile = outputDirectory.resolve("server-certificate.txt")
+    check(
+        !java.nio.file.Files
+            .exists(certificateFile),
+    ) { "The server certificate file already exists" }
+    java.nio.file.Files
+        .writeString(certificateFile, serverCertificate, Charsets.UTF_8)
+
+    println("DEVELOPMENT ONLY. Do not use these keys in production.")
+    println("Trust root public key:")
+    println("  ${trustRoot.publicKey}")
+    println("Server certificate saved to:")
+    println("  $certificateFile")
+    println("Trust root private key saved with owner-only permissions:")
+    println("  $trustRootFile")
+    println("Server signing private key saved with owner-only permissions:")
+    println("  $serverKeyFile")
+    println("Server configuration values are stored in the files above.")
 }
