@@ -3,6 +3,7 @@ package com.lnight.valence.server
 import com.lnight.valence.server.domain.AppendResult
 import com.lnight.valence.server.domain.InboxPurger
 import com.lnight.valence.server.domain.NewMessage
+import com.lnight.valence.server.routes.ServerMetrics
 import com.lnight.valence.server.store.InMemoryInboxStore
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.delay
@@ -68,10 +69,20 @@ class PurgeTest {
         testApplication {
             val store = InMemoryInboxStore()
             store.add(first, 5_000L)
-            application { schedulePurge(InboxPurger(store, TestClock(5_000L)), 20.milliseconds) }
+            application { schedulePurge(InboxPurger(store, TestClock(5_000L)), 20.milliseconds, ServerMetrics()) }
 
             startApplication()
 
             withTimeout(5.seconds) { while (store.messagesAfter(first, 0).isNotEmpty()) delay(10) }
         }
+
+    @Test
+    fun `the queue depth counts every stored message`() {
+        val store = InMemoryInboxStore()
+        store.add(first, 5_000L)
+        store.add(first, 100_000L)
+        store.add(second, 100_000L)
+
+        assertEquals(3, store.queueDepth())
+    }
 }

@@ -16,6 +16,7 @@ import com.lnight.valence.server.domain.SendMessageService
 import com.lnight.valence.server.domain.SenderCertificateIssuer
 import com.lnight.valence.server.domain.SenderCertificateService
 import com.lnight.valence.server.domain.TokenBucketRateLimiter
+import com.lnight.valence.server.routes.ServerMetrics
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import java.time.Clock
@@ -44,6 +45,8 @@ internal object TestServices {
         policies: RateLimitPolicies = RateLimitPolicies(),
         trustProxyHeaders: Boolean = false,
         clock: TestClock = TestClock(atMillis),
+        metrics: ServerMetrics = ServerMetrics(),
+        metricsToken: String? = null,
     ): ServerServices {
         val subscriptions = MailboxSubscriptions()
         val limiter = TokenBucketRateLimiter(clock)
@@ -63,6 +66,9 @@ internal object TestServices {
             rateLimits = policies,
             trustProxyHeaders = trustProxyHeaders,
             purger = InboxPurger(inbox, clock),
+            inbox = inbox,
+            metrics = metrics,
+            metricsToken = metricsToken,
         )
     }
 }

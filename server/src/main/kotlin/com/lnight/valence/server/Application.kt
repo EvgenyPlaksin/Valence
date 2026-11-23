@@ -24,9 +24,11 @@ import com.lnight.valence.server.domain.TokenBucketRateLimiter
 import com.lnight.valence.server.routes.AuthTokenRequestMapper
 import com.lnight.valence.server.routes.ClientAddresses
 import com.lnight.valence.server.routes.MessageDeliverFrameMapper
+import com.lnight.valence.server.routes.MetricNames
 import com.lnight.valence.server.routes.PreKeyBundleResponseMapper
 import com.lnight.valence.server.routes.RegisterRequestMapper
 import com.lnight.valence.server.routes.ReplaceSignedPreKeysRequestMapper
+import com.lnight.valence.server.routes.ServerMetrics
 import com.lnight.valence.server.routes.UploadOneTimePreKeysRequestMapper
 import com.lnight.valence.server.routes.accessToken
 import com.lnight.valence.server.routes.authRoutes
@@ -34,6 +36,8 @@ import com.lnight.valence.server.routes.ipRateLimiting
 import com.lnight.valence.server.routes.keyRoutes
 import com.lnight.valence.server.routes.loginRoutes
 import com.lnight.valence.server.routes.messageRoutes
+import com.lnight.valence.server.routes.metricsRecording
+import com.lnight.valence.server.routes.metricsRoutes
 import com.lnight.valence.server.routes.preKeyRoutes
 import com.lnight.valence.server.routes.registrationRoutes
 import com.lnight.valence.server.routes.senderCertificateRoutes
@@ -42,6 +46,7 @@ import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationStopPreparing
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.engine.embeddedServer
@@ -104,6 +109,9 @@ private fun createServices(): ServerServices {
         rateLimits = policies,
         trustProxyHeaders = ServerConfig.trustProxyHeaders(),
         purger = InboxPurger(inbox, clock),
+        inbox = inbox,
+        metrics = ServerMetrics(),
+        metricsToken = ServerConfig.metricsToken(),
     )
 }
 
@@ -114,6 +122,10 @@ fun Application.module(services: ServerServices) {
     install(Authentication) {
         accessToken(services.tokenVerifier)
     }
+    install(metricsRecording) {
+        metrics = services.metrics
+    }
+    monitor.subscribe(ApplicationStopPreparing) { services.subscriptions.shutdown() }
     install(WebSockets) {
         pingPeriod = PING_PERIOD_SECONDS.seconds
         timeout = IDLE_TIMEOUT_SECONDS.seconds
@@ -124,7 +136,7 @@ fun Application.module(services: ServerServices) {
         policies = services.rateLimits
         addresses = ClientAddresses(services.trustProxyHeaders)
     }
-    schedulePurge(services.purger, PURGE_INTERVAL_MINUTES.minutes)
+    schedulePurge(services.purger, PURGE_INTERVAL_MINUTES.minutes, services.metrics)
     routing {
         get("/health") {
             call.respond(HealthResponse())
@@ -135,7 +147,13 @@ fun Application.module(services: ServerServices) {
         keyRoutes(services.keys, ReplaceSignedPreKeysRequestMapper(), UploadOneTimePreKeysRequestMapper())
         preKeyRoutes(services.bundles, PreKeyBundleResponseMapper())
         messageRoutes(services.messages)
-        socketRoutes(services.receive, services.subscriptions, MessageDeliverFrameMapper())
+        socketRoutes(services.receive, services.subscriptions, MessageDeliverFrameMapper(), services.metrics)
         senderCertificateRoutes(services.certificates)
+        metricsRoutes(services.metrics, services.metricsToken) {
+            mapOf(
+                MetricNames.QUEUE_DEPTH to services.inbox.queueDepth().toLong(),
+                MetricNames.ACTIVE_CONNECTIONS to services.subscriptions.activeCount().toLong(),
+            )
+        }
     }
 }

@@ -1,0 +1,37 @@
+name: Server image
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "protocol/**"
+      - ".dockerignore"
+      - ".github/workflows/server-image.yml"
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "protocol/**"
+      - ".dockerignore"
+      - ".github/workflows/server-image.yml"
+
+concurrency:
+  group: server-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the image
+        run: docker build --platform linux/amd64 -f server/Dockerfile -t valence-server .
+
+      - name: Smoke test the image
+        run: bash server/scripts/smoke-test.sh valence-server

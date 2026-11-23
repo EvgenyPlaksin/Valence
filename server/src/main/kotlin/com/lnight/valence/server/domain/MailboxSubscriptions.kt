@@ -5,9 +5,13 @@ import java.util.concurrent.ConcurrentHashMap
 class MailboxSubscriptions : MessageNotifier {
     private val subscriptions = ConcurrentHashMap<String, Subscription>()
 
+    @Volatile
+    private var shuttingDown = false
+
     fun subscribe(mailboxId: String): Subscription {
         val subscription = Subscription()
         subscriptions.put(mailboxId, subscription)?.supersede()
+        if (shuttingDown) subscription.shutDown()
         return subscription
     }
 
@@ -20,5 +24,12 @@ class MailboxSubscriptions : MessageNotifier {
 
     override fun messageStored(mailboxId: String) {
         subscriptions[mailboxId]?.wake?.trySend(Unit)
+    }
+
+    fun activeCount(): Int = subscriptions.size
+
+    fun shutdown() {
+        shuttingDown = true
+        subscriptions.values.forEach { it.shutDown() }
     }
 }
