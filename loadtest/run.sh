@@ -6,6 +6,8 @@ VUS="${VUS:-200}"
 HOLD_SECONDS="${HOLD_SECONDS:-900}"
 SEND_RATE="${SEND_RATE:-20}"
 PROXY_PORT="${LOADTEST_PROXY_PORT:-18080}"
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
 
 case "${MODE}" in
     smoke|calibrate|fencing|quota|soak|all) ;;
@@ -170,6 +172,7 @@ run_k6() {
     ) &
     local stats_pid=$!
     if docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" run --rm \
+        --user "${HOST_UID}:${HOST_GID}" \
         -e MODE="${scenario}" \
         -e MANIFEST="${MANIFEST_DOCKER}" \
         -e HTTP_URL="http://haproxy:8080" \

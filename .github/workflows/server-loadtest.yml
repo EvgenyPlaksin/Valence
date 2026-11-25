@@ -53,5 +53,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: loadtest-telemetry-${{ github.run_id }}
-          path: /tmp/valence-loadtest-run.*/**
+          path: |
+            /tmp/valence-loadtest-run.*/**
+            !/tmp/valence-loadtest-run.*/manifest.json
           if-no-files-found: warn
