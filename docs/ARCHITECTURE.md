@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.15 |
+| **Status** | Draft v1.16 |
 | **Scope** | System contracts, module boundaries, data design, concurrency model |
 | **Out of scope** | Application code, UI design, push-notification vendor integration |
 | **Audience** | Maintainers, security reviewers, contributors |
@@ -1144,3 +1144,11 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 - Graceful shutdown is specified as closing every socket with code 1001 when the application starts to stop, and refusing new sockets with the same code.
 - The observability counters and gauges are enumerated, with a fixed scope list so that no identifiers can appear, and the token protected `GET /metrics` endpoint is specified.
 - The deployment requirements, the configuration variables, and the three production key ceremony commands are recorded, with a development only shortcut, and a continuous integration job that builds and smoke tests the container image.
+
+## Appendix Q: Changes from v1.15
+
+- PostgreSQL 17 is selected as the durable store for mailboxes, public keys, and inbox messages, with HikariCP and Flyway. Redis remains reserved for cross-node fan-out signalling.
+- The schema adds a durable per-mailbox server sequence and an insertion sequence for deterministic FIFO one-time prekey consumption.
+- Mailbox and inbox persistence interfaces are suspend functions. Database work runs on a bounded dispatcher sized to the HikariCP connection pool.
+- Message enqueueing, one-time prekey consumption, and signed/Kyber prekey replacement are specified as atomic database transactions, including quota enforcement without advancing the message sequence on rejection.
+- PostgreSQL startup configuration, automatic migrations, database readiness, and PostgreSQL 17 integration testing are specified.
