@@ -2,10 +2,13 @@ package com.lnight.valence.server.store
 
 import com.lnight.valence.server.DatabaseConfiguration
 import com.lnight.valence.server.domain.AppendResult
+import com.lnight.valence.server.domain.ConfirmResult
+import com.lnight.valence.server.domain.InboxPollResult
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.NewMessage
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.SignedPublicKey
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -113,7 +116,8 @@ class PostgresStoreIntegrationTest {
 
                 assertEquals(AppendResult.Appended(1), first)
                 assertEquals(AppendResult.QuotaExceeded, rejected)
-                database.inboxStore.deleteUpTo(mailbox.id, 1)
+                val generation = checkNotNull(database.inboxStore.advanceSocketGeneration(mailbox.id))
+                assertEquals(ConfirmResult.CONFIRMED, database.inboxStore.confirm(mailbox.id, generation, 1))
 
                 val next =
                     database.inboxStore.append(
@@ -193,6 +197,112 @@ class PostgresStoreIntegrationTest {
             }
         }
 
+    @Test
+    fun socketGenerationFencesConfirmationAndPollingReadsBothStates() =
+        runTest {
+            database().use { database ->
+                val mailbox = mailbox("mailbox-generation")
+                database.mailboxStore.create(mailbox, emptyList())
+                database.inboxStore.append(mailbox.id, NewMessage(bytes(1), 1_000L, 10_000L), 10)
+                val originalGeneration = database.inboxStore.advanceSocketGeneration(mailbox.id)
+
+                assertEquals(1L, originalGeneration)
+                assertEquals(
+                    InboxPollResult(1L, true),
+                    database.inboxStore.checkForUpdates(mailbox.id, 0, 2_000L),
+                )
+
+                val replacementGeneration = database.inboxStore.advanceSocketGeneration(mailbox.id)
+
+                assertEquals(2L, replacementGeneration)
+                assertEquals(ConfirmResult.STALE, database.inboxStore.confirm(mailbox.id, 1, 1))
+                assertEquals(listOf(1L), database.inboxStore.messagesAfter(mailbox.id, 0).map { it.serverSeq })
+                assertEquals(ConfirmResult.CONFIRMED, database.inboxStore.confirm(mailbox.id, 2, 1))
+                assertEquals(emptyList(), database.inboxStore.messagesAfter(mailbox.id, 0))
+            }
+        }
+
+    @Test
+    fun concurrentConnectAndConfirmSerializeOnTheSocketStateRow() =
+        runTest {
+            database().use { database ->
+                val mailbox = mailbox("mailbox-generation-race")
+                database.mailboxStore.create(mailbox, emptyList())
+                database.inboxStore.append(mailbox.id, NewMessage(bytes(1), 1_000L, 10_000L), 10)
+                val originalGeneration = checkNotNull(database.inboxStore.advanceSocketGeneration(mailbox.id))
+
+                val start = CompletableDeferred<Unit>()
+                val connect =
+                    async(Dispatchers.IO) {
+                        start.await()
+                        database.inboxStore.advanceSocketGeneration(mailbox.id)
+                    }
+                val confirm =
+                    async(Dispatchers.IO) {
+                        start.await()
+                        database.inboxStore.confirm(mailbox.id, originalGeneration, 1)
+                    }
+                start.complete(Unit)
+                val newGeneration = connect.await()
+                val confirmResult = confirm.await()
+                val messages = database.inboxStore.messagesAfter(mailbox.id, 0).map { it.serverSeq }
+
+                assertEquals(originalGeneration + 1, newGeneration)
+                when (confirmResult) {
+                    ConfirmResult.CONFIRMED -> assertEquals(emptyList(), messages)
+                    ConfirmResult.STALE -> assertEquals(listOf(1L), messages)
+                    ConfirmResult.INVALID -> error("The valid confirmation was rejected as invalid")
+                }
+            }
+        }
+
+    @Test
+    fun concurrentReconnectsAdvanceTheGenerationWithoutLostUpdates() =
+        runTest {
+            database().use { database ->
+                val mailbox = mailbox("mailbox-reconnect-storm")
+                database.mailboxStore.create(mailbox, emptyList())
+                val generations =
+                    (1..32)
+                        .map {
+                            async(Dispatchers.IO) { database.inboxStore.advanceSocketGeneration(mailbox.id) }
+                        }.awaitAll()
+
+                assertEquals((1L..32L).toSet(), generations.toSet())
+                assertEquals(32L, database.inboxStore.currentSocketGeneration(mailbox.id))
+            }
+        }
+
+    @Test
+    fun purgerSkipsWhenAnotherInstanceHoldsTheAdvisoryLock() =
+        runTest {
+            database().use { first ->
+                database().use { second ->
+                    val mailbox = mailbox("mailbox-purge-lock")
+                    first.mailboxStore.create(mailbox, emptyList())
+                    first.inboxStore.append(mailbox.id, NewMessage(bytes(1), 1_000L, 2_000L), 10)
+                    val configuration = databaseConfiguration()
+                    DriverManager
+                        .getConnection(
+                            configuration.url,
+                            configuration.username,
+                            configuration.password,
+                        ).use { lockConnection ->
+                            lockConnection.autoCommit = false
+                            lockConnection
+                                .prepareStatement("SELECT pg_advisory_xact_lock(?)")
+                                .use { statement ->
+                                    statement.setLong(1, PURGE_LOCK_ID)
+                                    statement.executeQuery().use { result -> result.next() }
+                                }
+                            assertEquals(0, second.inboxStore.purgeExpired(2_000L))
+                            lockConnection.commit()
+                        }
+                    assertEquals(1, second.inboxStore.purgeExpired(2_000L))
+                }
+            }
+        }
+
     private fun database() = PostgresDatabase.open(databaseConfiguration())
 
     private fun databaseConfiguration() =
@@ -249,5 +359,6 @@ class PostgresStoreIntegrationTest {
         private const val TEST_DATABASE_URL = "VALENCE_TEST_DATABASE_URL"
         private const val TEST_DATABASE_USER = "VALENCE_TEST_DATABASE_USER"
         private const val TEST_DATABASE_PASSWORD = "VALENCE_TEST_DATABASE_PASSWORD"
+        private const val PURGE_LOCK_ID = 0x56414C454E4345L
     }
 }

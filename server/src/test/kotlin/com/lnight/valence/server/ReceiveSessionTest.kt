@@ -1,5 +1,6 @@
 package com.lnight.valence.server
 
+import com.lnight.valence.server.domain.ConfirmResult
 import com.lnight.valence.server.domain.NewMessage
 import com.lnight.valence.server.domain.ReceiveSession
 import com.lnight.valence.server.store.InMemoryInboxStore
@@ -16,7 +17,7 @@ class ReceiveSessionTest {
     private val id = RegistrationTestSupport.MAILBOX_ID
     private val now = ChallengeTestSupport.ISSUED_AT_MILLIS
     private val inbox = InMemoryInboxStore()
-    private val session = ReceiveSession(id, inbox, Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC))
+    private val session = ReceiveSession(id, 0, inbox, Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC))
 
     private suspend fun add(
         count: Int = 1,
@@ -69,7 +70,7 @@ class ReceiveSessionTest {
     @Test
     fun `a second or a negative resume is rejected`() =
         runTest {
-            assertFalse(ReceiveSession(id, inbox, Clock.systemUTC()).resume(-1))
+            assertFalse(ReceiveSession(id, 0, inbox, Clock.systemUTC()).resume(-1))
             assertTrue(session.resume(0))
             assertFalse(session.resume(0))
         }
@@ -98,7 +99,7 @@ class ReceiveSessionTest {
         runTest {
             add(2)
 
-            assertFalse(session.confirm(2))
+            assertEquals(ConfirmResult.INVALID, session.confirm(2))
             assertEquals(listOf(1L, 2L), stored())
         }
 
@@ -109,10 +110,10 @@ class ReceiveSessionTest {
             session.resume(0)
             batch()
 
-            assertTrue(session.confirm(2))
-            assertTrue(session.confirm(1))
+            assertEquals(ConfirmResult.CONFIRMED, session.confirm(2))
+            assertEquals(ConfirmResult.CONFIRMED, session.confirm(1))
             assertEquals(listOf(3L), stored())
-            assertFalse(session.confirm(-1))
+            assertEquals(ConfirmResult.INVALID, session.confirm(-1))
         }
 
     @Test
@@ -122,7 +123,29 @@ class ReceiveSessionTest {
             session.resume(0)
             batch()
 
-            assertTrue(session.confirm(150))
+            assertEquals(ConfirmResult.CONFIRMED, session.confirm(150))
             assertEquals((101L..150L).toList(), stored())
+        }
+
+    @Test
+    fun `a stale session cannot confirm messages after a newer socket connects`() =
+        runTest {
+            add(2)
+            session.resume(0)
+            session.nextBatch()
+            inbox.advanceSocketGeneration(id)
+
+            assertEquals(ConfirmResult.STALE, session.confirm(2))
+            assertEquals(listOf(1L, 2L), stored())
+        }
+
+    @Test
+    fun `polling reports pending messages and the current generation`() =
+        runTest {
+            add(1)
+            session.resume(0)
+
+            assertEquals(0L, session.checkForUpdates()?.generation)
+            assertEquals(true, session.checkForUpdates()?.hasMessages)
         }
 }

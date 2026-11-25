@@ -13,7 +13,7 @@ class MailboxSubscriptionsTest {
 
     @Test
     fun `a stored message wakes the subscription of its mailbox`() {
-        val subscription = subscriptions.subscribe(id)
+        val subscription = subscriptions.subscribe(id, 1)
 
         subscriptions.messageStored(id)
 
@@ -22,7 +22,7 @@ class MailboxSubscriptionsTest {
 
     @Test
     fun `other mailboxes are not woken`() {
-        val subscription = subscriptions.subscribe(id)
+        val subscription = subscriptions.subscribe(id, 1)
 
         subscriptions.messageStored(other)
 
@@ -31,7 +31,7 @@ class MailboxSubscriptionsTest {
 
     @Test
     fun `wake ups are conflated`() {
-        val subscription = subscriptions.subscribe(id)
+        val subscription = subscriptions.subscribe(id, 1)
 
         repeat(3) { subscriptions.messageStored(id) }
 
@@ -41,8 +41,8 @@ class MailboxSubscriptionsTest {
 
     @Test
     fun `a newer subscription supersedes the older one`() {
-        val older = subscriptions.subscribe(id)
-        val newer = subscriptions.subscribe(id)
+        val older = subscriptions.subscribe(id, 1)
+        val newer = subscriptions.subscribe(id, 2)
 
         subscriptions.messageStored(id)
 
@@ -54,8 +54,8 @@ class MailboxSubscriptionsTest {
 
     @Test
     fun `unsubscribing an old subscription keeps the newer one`() {
-        val older = subscriptions.subscribe(id)
-        val newer = subscriptions.subscribe(id)
+        val older = subscriptions.subscribe(id, 1)
+        val newer = subscriptions.subscribe(id, 2)
 
         subscriptions.unsubscribe(id, older)
         subscriptions.messageStored(id)
@@ -64,8 +64,28 @@ class MailboxSubscriptionsTest {
     }
 
     @Test
+    fun `duplicate and out of order generation hints do not supersede a newer socket`() {
+        val subscription = subscriptions.subscribe(id, 4)
+
+        subscriptions.supersedeOlder(id, 3)
+        subscriptions.supersedeOlder(id, 4)
+        subscriptions.supersedeOlder(id, 3)
+
+        assertFalse(subscription.superseded.isCompleted)
+    }
+
+    @Test
+    fun `a verified newer generation supersedes only older local sockets`() {
+        val older = subscriptions.subscribe(id, 4)
+
+        subscriptions.supersedeOlder(id, 5)
+
+        assertTrue(older.superseded.isCompleted)
+    }
+
+    @Test
     fun `an unsubscribed mailbox is no longer woken`() {
-        val subscription = subscriptions.subscribe(id)
+        val subscription = subscriptions.subscribe(id, 1)
 
         subscriptions.unsubscribe(id, subscription)
         subscriptions.messageStored(id)
@@ -80,10 +100,10 @@ class MailboxSubscriptionsTest {
 
     @Test
     fun `a shutdown ends every subscription and refuses new ones`() {
-        val existing = subscriptions.subscribe(id)
+        val existing = subscriptions.subscribe(id, 1)
 
         subscriptions.shutdown()
-        val late = subscriptions.subscribe(other)
+        val late = subscriptions.subscribe(other, 1)
 
         assertTrue(existing.shuttingDown.isCompleted)
         assertTrue(late.shuttingDown.isCompleted)
@@ -91,8 +111,8 @@ class MailboxSubscriptionsTest {
 
     @Test
     fun `the active count follows subscriptions`() {
-        val subscription = subscriptions.subscribe(id)
-        subscriptions.subscribe(other)
+        val subscription = subscriptions.subscribe(id, 1)
+        subscriptions.subscribe(other, 1)
 
         assertEquals(2, subscriptions.activeCount())
 

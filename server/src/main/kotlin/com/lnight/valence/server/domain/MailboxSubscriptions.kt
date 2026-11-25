@@ -8,8 +8,11 @@ class MailboxSubscriptions : MessageNotifier {
     @Volatile
     private var shuttingDown = false
 
-    fun subscribe(mailboxId: String): Subscription {
-        val subscription = Subscription()
+    fun subscribe(
+        mailboxId: String,
+        generation: Long,
+    ): Subscription {
+        val subscription = Subscription(generation)
         subscriptions.put(mailboxId, subscription)?.supersede()
         if (shuttingDown) subscription.shutDown()
         return subscription
@@ -25,6 +28,27 @@ class MailboxSubscriptions : MessageNotifier {
     override fun messageStored(mailboxId: String) {
         subscriptions[mailboxId]?.wake?.trySend(Unit)
     }
+
+    fun supersedeOlder(
+        mailboxId: String,
+        generation: Long,
+    ) {
+        subscriptions[mailboxId]
+            ?.takeIf { it.generation < generation }
+            ?.supersede()
+    }
+
+    fun wakeIfCurrent(
+        mailboxId: String,
+        generation: Long,
+    ) {
+        subscriptions[mailboxId]
+            ?.takeIf { it.generation == generation }
+            ?.wake
+            ?.trySend(Unit)
+    }
+
+    fun activeMailboxIds(): Set<String> = subscriptions.keys.toSet()
 
     fun activeCount(): Int = subscriptions.size
 

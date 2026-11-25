@@ -12,6 +12,7 @@ class ReceiveSessionFrameLimitTest {
     private val session =
         ReceiveSession(
             RegistrationTestSupport.MAILBOX_ID,
+            0,
             InMemoryInboxStore(),
             clock,
             RateLimitPolicy(burst = 2, refillPerSecond = 1.0),

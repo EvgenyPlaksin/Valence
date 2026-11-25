@@ -3,7 +3,9 @@ package com.lnight.valence.server.domain
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 
-class Subscription {
+class Subscription(
+    val generation: Long,
+) {
     val wake = Channel<Unit>(Channel.CONFLATED)
     val superseded = CompletableDeferred<Unit>()
     val shuttingDown = CompletableDeferred<Unit>()
