@@ -54,7 +54,7 @@ dependencies {
     implementation("org.signal:libsignal-server:0.106.2")
     implementation("org.postgresql:postgresql:42.7.7")
     implementation("com.zaxxer:HikariCP:7.1.0")
-    implementation("org.flywaydb:flyway-core:11.8.2")
+    implementation("org.flywaydb:flyway-core:13.13.0")
     implementation("org.flywaydb:flyway-database-postgresql:11.8.2")
 
     implementation("ch.qos.logback:logback-classic:1.6.8")
