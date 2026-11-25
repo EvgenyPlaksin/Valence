@@ -53,7 +53,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.13.0")
     implementation("org.signal:libsignal-server:0.106.2")
     implementation("org.postgresql:postgresql:42.7.7")
-    implementation("com.zaxxer:HikariCP:6.3.0")
+    implementation("com.zaxxer:HikariCP:7.1.0")
     implementation("org.flywaydb:flyway-core:11.8.2")
     implementation("org.flywaydb:flyway-database-postgresql:11.8.2")
 
@@ -66,8 +66,8 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("com.lemonappdev:konsist:0.18.1")
 
-    add("integrationTestImplementation", "org.testcontainers:postgresql:1.21.3")
     add("integrationTestImplementation", "org.testcontainers:junit-jupiter:1.21.4")
+    add("integrationTestImplementation", "org.testcontainers:postgresql:1.21.4")
 }
 
 kotlin {
