@@ -6,6 +6,7 @@ import java.time.Clock
 
 class ReceiveSession(
     private val mailboxId: String,
+    private val generation: Long,
     private val inbox: InboxStore,
     private val clock: Clock,
     private val framePolicy: RateLimitPolicy = RateLimitPolicies().socketFrames,
@@ -31,14 +32,19 @@ class ReceiveSession(
             batch
         }
 
-    suspend fun confirm(upToServerSeq: Long): Boolean =
+    suspend fun checkForUpdates(): InboxPollResult? =
+        mutex.withLock {
+            val position = cursor ?: return null
+            inbox.checkForUpdates(mailboxId, position, clock.millis())
+        }
+
+    suspend fun confirm(upToServerSeq: Long): ConfirmResult =
         mutex.withLock {
             val sent = cursor
             if (sent == null || upToServerSeq < 0) {
-                false
+                ConfirmResult.INVALID
             } else {
-                inbox.deleteUpTo(mailboxId, minOf(upToServerSeq, sent))
-                true
+                inbox.confirm(mailboxId, generation, minOf(upToServerSeq, sent))
             }
         }
 

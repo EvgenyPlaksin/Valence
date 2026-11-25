@@ -117,6 +117,44 @@ class ServerConfigTest {
     }
 
     @Test
+    fun `redis configuration is optional and requires a channel prefix when enabled`() {
+        assertNull(ServerConfig.redisConfiguration(emptyMap()))
+        assertFailsWith<IllegalStateException> {
+            ServerConfig.redisConfiguration(mapOf(ServerConfig.REDIS_URL_VARIABLE to "redis://localhost:6379"))
+        }
+
+        val configuration =
+            ServerConfig.redisConfiguration(
+                mapOf(
+                    ServerConfig.REDIS_URL_VARIABLE to "rediss://user:password@redis.example:6380",
+                    ServerConfig.REDIS_CHANNEL_PREFIX_VARIABLE to "valence:production",
+                ),
+            )
+
+        assertEquals("valence:production:notifications", configuration?.channel)
+    }
+
+    @Test
+    fun `invalid redis endpoints and channel prefixes are rejected`() {
+        assertFailsWith<IllegalStateException> {
+            ServerConfig.redisConfiguration(
+                mapOf(
+                    ServerConfig.REDIS_URL_VARIABLE to "http://localhost:6379",
+                    ServerConfig.REDIS_CHANNEL_PREFIX_VARIABLE to "valence:local",
+                ),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            ServerConfig.redisConfiguration(
+                mapOf(
+                    ServerConfig.REDIS_URL_VARIABLE to "redis://localhost:6379",
+                    ServerConfig.REDIS_CHANNEL_PREFIX_VARIABLE to "valence production",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `proxy headers are trusted only when explicitly enabled`() {
         assertEquals(false, ServerConfig.trustProxyHeaders(emptyMap()))
         assertEquals(false, ServerConfig.trustProxyHeaders(mapOf(ServerConfig.TRUST_PROXY_HEADERS_VARIABLE to "yes")))

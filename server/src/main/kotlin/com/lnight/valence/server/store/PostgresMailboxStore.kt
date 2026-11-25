@@ -46,7 +46,15 @@ class PostgresMailboxStore(
                         statement.setTimestamp(10, Timestamp.from(Instant.ofEpochMilli(mailbox.createdAtMillis)))
                         statement.executeUpdate() == 1
                     }
-            if (inserted) insertPreKeys(connection, mailbox.id, oneTimePreKeys)
+            if (inserted) {
+                connection
+                    .prepareStatement("INSERT INTO mailbox_socket_state (mailbox_id) VALUES (?)")
+                    .use { statement ->
+                        statement.setString(1, mailbox.id)
+                        check(statement.executeUpdate() == 1) { "Socket state was not created for the mailbox" }
+                    }
+                insertPreKeys(connection, mailbox.id, oneTimePreKeys)
+            }
             inserted
         }
 

@@ -56,6 +56,7 @@ dependencies {
     implementation("com.zaxxer:HikariCP:7.1.0")
     implementation("org.flywaydb:flyway-core:13.13.0")
     implementation("org.flywaydb:flyway-database-postgresql:11.8.2")
+    implementation("io.lettuce:lettuce-core:7.9.0.RELEASE")
 
     implementation("ch.qos.logback:logback-classic:1.6.8")
 
@@ -79,7 +80,7 @@ tasks.test {
 }
 
 tasks.register<Test>("integrationTest") {
-    description = "Runs integration tests against PostgreSQL using Testcontainers"
+    description = "Runs PostgreSQL and Redis integration tests using Testcontainers"
     group = "verification"
     testClassesDirs = integrationTestSourceSet.output.classesDirs
     classpath = integrationTestSourceSet.runtimeClasspath
@@ -121,6 +122,7 @@ val allowedDependencyGroups =
         "org.postgresql",
         "com.zaxxer",
         "org.flywaydb",
+        "io.lettuce",
     )
 
 val productionDependencies =

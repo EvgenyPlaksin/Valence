@@ -14,10 +14,21 @@ interface InboxStore {
         limit: Int = Int.MAX_VALUE,
     ): List<QueuedMessage>
 
-    suspend fun deleteUpTo(
+    suspend fun advanceSocketGeneration(mailboxId: String): Long?
+
+    suspend fun currentSocketGeneration(mailboxId: String): Long?
+
+    suspend fun checkForUpdates(
         mailboxId: String,
+        afterServerSeq: Long,
+        nowMillis: Long,
+    ): InboxPollResult?
+
+    suspend fun confirm(
+        mailboxId: String,
+        generation: Long,
         upToServerSeq: Long,
-    )
+    ): ConfirmResult
 
     suspend fun purgeExpired(nowMillis: Long): Int
 
