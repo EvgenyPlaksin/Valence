@@ -1,0 +1,124 @@
+x-server-environment: &server-environment
+  PORT: 8081
+  VALENCE_DATABASE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-valence_loadtest}
+  VALENCE_DATABASE_USER: ${POSTGRES_USER:-valence}
+  VALENCE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?Set a temporary POSTGRES_PASSWORD}
+  VALENCE_DB_MAX_CONNECTIONS: 10
+  VALENCE_DB_AUTO_MIGRATE: ${VALENCE_DB_AUTO_MIGRATE:-true}
+  VALENCE_REDIS_URL: redis://valence:${REDIS_PASSWORD:?Set a temporary REDIS_PASSWORD}@redis:6379
+  VALENCE_REDIS_CHANNEL_PREFIX: ${VALENCE_REDIS_CHANNEL_PREFIX:?Set a run-specific Redis prefix}
+  VALENCE_TRUST_PROXY_HEADERS: "true"
+  VALENCE_METRICS_TOKEN: ${VALENCE_METRICS_TOKEN:?Set a temporary metrics token}
+  VALENCE_CHALLENGE_KEY: ${VALENCE_CHALLENGE_KEY:?Set a temporary challenge key}
+  VALENCE_TOKEN_KEY: ${VALENCE_TOKEN_KEY:?Set a temporary token key}
+  VALENCE_SERVER_CERTIFICATE: ${VALENCE_SERVER_CERTIFICATE:?Set a temporary server certificate}
+  VALENCE_CERTIFICATE_KEY: ${VALENCE_CERTIFICATE_KEY:?Set a temporary certificate key}
+  JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xms128m -Xmx512m -Xss512k -XX:+UseG1GC}
+
+services:
+  db:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-valence_loadtest}
+      POSTGRES_USER: ${POSTGRES_USER:-valence}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a temporary POSTGRES_PASSWORD}
+    volumes:
+      - ./loadtest:/scripts:ro
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - max_connections=60
+    cpus: 1
+    mem_limit: 2g
+
+  redis:
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set a temporary REDIS_PASSWORD}
+      REDIS_CHANNEL_PREFIX: ${VALENCE_REDIS_CHANNEL_PREFIX:?Set a run-specific Redis prefix}
+    command:
+      - sh
+      - -c
+      - |
+        printf 'user default off\nuser valence on >%s &%s:* +publish +subscribe +ping +info\n' "$$REDIS_PASSWORD" "$$REDIS_CHANNEL_PREFIX" > /tmp/users.acl
+        exec redis-server --aclfile /tmp/users.acl --save "" --appendonly no
+    cpus: 0.5
+    mem_limit: 512m
+
+  server:
+    env_file: []
+    environment: *server-environment
+    cpus: 0.5
+    mem_limit: 1g
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+
+  server-b:
+    image: valence-server
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file: []
+    environment: *server-environment
+    ports:
+      - "127.0.0.1:${SERVER_B_PORT:-18082}:8081"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    cpus: 0.5
+    mem_limit: 1g
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+
+  haproxy:
+    image: haproxy:3.2-alpine
+    volumes:
+      - ./loadtest/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "127.0.0.1:${LOADTEST_PROXY_PORT:-18080}:8080"
+      - "127.0.0.1:${LOADTEST_STATS_PORT:-18404}:8404"
+    depends_on:
+      - server
+      - server-b
+    cpus: 0.5
+    mem_limit: 256m
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  k6:
+    image: grafana/k6:0.56.0
+    profiles:
+      - loadtest
+    volumes:
+      - ./loadtest:/scripts:ro
+      - ${LOADTEST_RUN_DIR:?Set LOADTEST_RUN_DIR}:/run:rw
+    cpus: 2
+    mem_limit: 4g
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
+
+  tools:
+    image: python:3.13-slim
+    profiles:
+      - loadtest
+    entrypoint:
+      - python
+    volumes:
+      - ./loadtest:/scripts:ro
+      - ${LOADTEST_RUN_DIR:?Set LOADTEST_RUN_DIR}:/run:rw
+    depends_on:
+      - db
+      - server
+      - server-b

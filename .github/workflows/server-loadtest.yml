@@ -1,0 +1,57 @@
+name: Server Load Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Test mode (smoke, calibrate, fencing, quota, soak, all)'
+        required: true
+        default: 'smoke'
+        type: choice
+        options:
+          - smoke
+          - calibrate
+          - fencing
+          - quota
+          - soak
+          - all
+  schedule:
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  loadtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Make scripts executable
+        run: |
+          chmod +x loadtest/run.sh
+          chmod +x server/gradlew
+
+      - name: Run Load Test Harness
+        run: |
+          ./loadtest/run.sh "${{ github.event_name == 'schedule' && 'all' || github.event.inputs.mode || 'smoke' }}"
+
+      - name: Upload Telemetry Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loadtest-telemetry-${{ github.run_id }}
+          path: /tmp/valence-loadtest-run.*/**
+          if-no-files-found: warn
