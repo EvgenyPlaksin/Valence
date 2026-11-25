@@ -311,6 +311,45 @@ PORT=18081
             return [long]$match.Groups[1].Value
         }
 
+        function Assert-HikariMetrics {
+            $metricFiles = @(Get-ChildItem $runDir -Filter "node_*_metrics*.txt" -File)
+            if ($metricFiles.Count -eq 0) {
+                throw "No per-node metrics snapshots were found"
+            }
+            foreach ($file in $metricFiles) {
+                $metrics = Get-Content $file.FullName -Raw
+                $requiredNames = @(
+                    "valence_hikari_connections_active",
+                    "valence_hikari_connections_idle",
+                    "valence_hikari_connections_total",
+                    "valence_hikari_connections_max",
+                    "valence_hikari_threads_awaiting_connection",
+                    "valence_hikari_connection_acquire_attempts_total",
+                    "valence_hikari_connection_acquire_nanos_total",
+                    "valence_hikari_connection_timeouts_total"
+                )
+                $metricValues = @{}
+                foreach ($name in $requiredNames) {
+                    $match = [regex]::Match($metrics, '(?m)^' + [regex]::Escape($name) + '\s+([0-9]+)\r?$')
+                    if ($match.Success) {
+                        $metricValues[$name] = [long]$match.Groups[1].Value
+                    }
+                }
+                if ($metricValues.Count -ne $requiredNames.Count) {
+                    throw "Required Hikari metrics are missing from $($file.Name)"
+                }
+                $waiters = $metricValues["valence_hikari_threads_awaiting_connection"]
+                $timeouts = $metricValues["valence_hikari_connection_timeouts_total"]
+                if ($metricValues["valence_hikari_connections_max"] -lt 1) {
+                    throw "Hikari maximum pool size is invalid in $($file.Name)"
+                }
+                if ($waiters -ne 0 -or $timeouts -ne 0) {
+                    throw "Hikari contention in $($file.Name): waiters=$waiters timeouts=$timeouts"
+                }
+            }
+            Write-Host "Hikari waiters=0 and connection timeouts=0 across $($metricFiles.Count) snapshots"
+        }
+
         if ($Mode -eq "smoke" -or $Mode -eq "all") {
             Write-Host "=== Running Smoke Test ==="
             Invoke-K6Scenario -ScenarioMode "smoke" -VusArg 10 -HoldSecondsArg 20 -RateArg 5
@@ -431,11 +470,11 @@ PORT=18081
                 Remove-Job $drainJob -ErrorAction SilentlyContinue
                 throw "Drain WebSocket did not connect to node A"
             }
+            $readySamples = @("sampled_at,status", "before_sigterm,$($nodeAReady.StatusCode)")
             & docker compose -p $projectName @composeFiles kill -s SIGTERM server
             if ($LASTEXITCODE -ne 0) {
                 throw "Failed to send SIGTERM to node A"
             }
-            $readySamples = @("sampled_at,status")
             for ($k = 0; $k -lt 50; $k++) {
                 $statusCode = 0
                 try {
@@ -452,7 +491,11 @@ PORT=18081
             }
             $readySamples | Set-Content (Join-Path $runDir "sigterm_ready_window.csv")
             $ready200Count = @($readySamples | Select-String ",200$").Count
-            Write-Host "Node A /ready samples during SIGTERM: 200=$ready200Count total=$($readySamples.Count - 1); drain WebSocket must close with 1001"
+            $ready503Count = @($readySamples | Select-String ",503$").Count
+            Write-Host "Node A /ready before SIGTERM=$($nodeAReady.StatusCode); during SIGTERM: 200=$ready200Count 503=$ready503Count; drain WebSocket must close with 1001"
+            if ($ready503Count -lt 1) {
+                throw "Node A /ready never returned 503 during the drain window"
+            }
             Wait-Job $drainJob -Timeout 90 | Out-Null
             if ($drainJob.State -ne "Completed") {
                 Stop-Job $drainJob -ErrorAction SilentlyContinue
@@ -544,6 +587,7 @@ PORT=18081
         $nodeBMetrics = (Invoke-WebRequest -Uri "http://127.0.0.1:18082/metrics" -Headers $metricHeader -UseBasicParsing).Content
         $nodeAMetrics | Set-Content (Join-Path $runDir "node_a_metrics.txt")
         $nodeBMetrics | Set-Content (Join-Path $runDir "node_b_metrics.txt")
+        Assert-HikariMetrics
         if ($Mode -in @("all", "soak")) {
             $purgedA = Get-MetricValue -Metrics $nodeAMetricsDuringSoak -Name "valence_messages_purged_total"
             $purgedB = Get-MetricValue -Metrics $nodeBMetricsDuringSoak -Name "valence_messages_purged_total"

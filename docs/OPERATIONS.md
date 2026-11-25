@@ -25,6 +25,7 @@ Everything comes from environment variables. None of the secrets below belong in
 | `VALENCE_DATABASE_PASSWORD` | Yes | PostgreSQL password |
 | `VALENCE_DB_MAX_CONNECTIONS` | No | Hikari connection limit and matching database-dispatcher parallelism, default 10 |
 | `VALENCE_DB_AUTO_MIGRATE` | No | Run Flyway migrations at startup, default `true`; when `false`, startup fails if migrations are pending |
+| `VALENCE_SHUTDOWN_DRAIN_MS` | No | Keep existing WebSockets open after readiness changes to 503, default `0`, maximum `60000` |
 | `VALENCE_REDIS_URL` | No | Private Redis URL for cross-node Pub/Sub, for example `redis://` or `rediss://`; credentials must be ACL-limited and are never logged |
 | `VALENCE_REDIS_CHANNEL_PREFIX` | With Redis | Environment-specific channel prefix; Redis is disabled if the URL is unset |
 | `REDIS_PASSWORD` | Local Compose | Password for the Compose-only ACL user, used to form `VALENCE_REDIS_URL` |
@@ -160,7 +161,7 @@ The integration task also starts Redis 8.12.0 for Pub/Sub tests. Test coverage i
 
 ## Multiple server instances
 
-Run server instances behind a load balancer, with every instance using the same PostgreSQL database and Redis endpoint. Redis notifications reduce delivery latency; they are not required for correctness. If Redis is disconnected, connected sockets recover through the PostgreSQL polling path (30 seconds initially, with jitter). `/ready` reports PostgreSQL readiness and does not remove a server from service solely because Redis is unavailable.
+Run server instances behind a load balancer, with every instance using the same PostgreSQL database and Redis endpoint. Redis notifications reduce delivery latency; they are not required for correctness. If Redis is disconnected, connected sockets recover through the PostgreSQL polling path (30 seconds initially, with jitter). `/ready` reports PostgreSQL readiness, returns 503 as soon as shutdown drain begins, and does not remove a server from service solely because Redis is unavailable.
 
 Each socket connection advances the mailbox's PostgreSQL generation. Confirms from an older generation are rejected in the same transaction that would delete inbox rows. Apply the additive socket-state migration before deploying the new server code, and do not enable multi-instance traffic or rely on generation fencing until every active server runs the fencing-capable version. Keep rolling migrations backward-compatible with old and new binaries; Flyway's migration lock serializes migration attempts but does not make incompatible schema changes safe during a rolling deploy.
 
@@ -170,6 +171,8 @@ Budget the database connection pool across the fleet:
 server instance count × VALENCE_DB_MAX_CONNECTIONS + operational headroom
     <= PostgreSQL max_connections
 ```
+
+Monitor the per-node Hikari gauges and acquisition counters listed below. `valence_hikari_threads_awaiting_connection` is instantaneous; use the cumulative `valence_hikari_connection_timeouts_total` and `valence_hikari_connection_acquire_nanos_total` to retain evidence of contention between scrapes.
 
 Each idle resumed socket performs one indexed existence/generation check per polling interval. The interval is jittered from 15 to 45 seconds (30 seconds on average). The approximate poll query rate is `idle resumed sockets / poll interval seconds`; at 100,000 sockets and a 30-second average this is about 3,300 checks per second, or roughly 7–17 concurrently occupied database connections at 2–5 ms per query. The scale test must state whether its socket count is fleet-wide or per-node, measure query latency and database CPU, and keep Hikari waiters at zero for the selected deployment topology. If the pool or database has insufficient headroom, test a 60–120 second interval before adding a more complex batching mechanism. Reconnects also write a new socket generation; clients need jittered reconnect backoff, and the reconnect-storm test must measure generation-write latency and bounded database concurrency. Redis reconnect catch-up is capped at eight concurrent generation checks per server instance.
 
@@ -185,7 +188,7 @@ The expiry purge runs on every process but is guarded by `pg_try_advisory_xact_l
 
 ## Shutdown
 
-On SIGTERM the server closes every open socket with code 1001 and then stops after the engine's grace period. Clients reconnect and resume from their cursor, so nothing is lost. The default `docker stop` timeout of 10 seconds is enough.
+On SIGTERM the server immediately marks `/ready` unavailable (503) while `/health` stays 200, and refuses new WebSocket upgrades with code 1001 before they advance a mailbox generation. Existing sockets remain open for `VALENCE_SHUTDOWN_DRAIN_MS`, then close with code 1001. The default is 0; set a positive delay only when it fits inside the container's stop timeout. Keep the delay plus the engine's shutdown time within Docker's default 10-second `docker stop` budget. Clients reconnect and resume from their cursor, so nothing is lost.
 
 ## Metrics
 
@@ -196,12 +199,14 @@ Set `VALENCE_METRICS_TOKEN` and scrape `GET /metrics` with `Authorization: Beare
 - `valence_messages_delivered_total`
 - `valence_invalid_frames_total`
 - `valence_messages_purged_total`
+- `valence_hikari_connections_active`, `valence_hikari_connections_idle`, `valence_hikari_connections_total`, `valence_hikari_connections_max`, and `valence_hikari_threads_awaiting_connection`
+- `valence_hikari_connection_acquire_attempts_total`, `valence_hikari_connection_acquire_nanos_total` (nanoseconds), and `valence_hikari_connection_timeouts_total`
 - Redis publish failures and publisher queue overflows
 - Redis subscriber failures, malformed notices, catch-up drops/failures, and connection gauges
 - `valence_redis_publish_queue_depth`
 - `valence_queue_depth` and `valence_active_connections`
 
-The counters are aggregate. No mailbox ID, key, token, or path appears in them.
+The counters are aggregate. No mailbox ID, key, token, or path appears in them. `valence_hikari_threads_awaiting_connection` is an instantaneous gauge and may miss brief waits between scrapes; the cumulative acquisition duration and timeout counters retain evidence of completed waits and timeouts.
 
 ## Limits of the current version
 

@@ -6,9 +6,12 @@ import com.lnight.valence.protocol.ProtocolJson
 import com.lnight.valence.protocol.ProtocolRoutes
 import com.lnight.valence.protocol.frame.DeliveryConfirmFrame
 import com.lnight.valence.protocol.frame.SyncResumeFrame
+import com.lnight.valence.server.domain.DatabasePoolMetrics
+import com.lnight.valence.server.domain.DatabasePoolMetricsSnapshot
 import com.lnight.valence.server.domain.NewMessage
 import com.lnight.valence.server.domain.RateLimitPolicies
 import com.lnight.valence.server.domain.RateLimitPolicy
+import com.lnight.valence.server.routes.ServerMetrics
 import com.lnight.valence.server.store.InMemoryInboxStore
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import io.ktor.client.plugins.websocket.WebSockets
@@ -44,6 +47,7 @@ class MetricsRoutesTest {
     private fun ApplicationTestBuilder.start(
         metricsToken: String? = token,
         messages: Int = 0,
+        metrics: ServerMetrics = ServerMetrics(),
     ) {
         val inbox = InMemoryInboxStore()
         kotlinx.coroutines.runBlocking {
@@ -51,7 +55,15 @@ class MetricsRoutesTest {
         }
         val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox())
         application {
-            module(TestServices.create(store = store, inbox = inbox, policies = generous, metricsToken = metricsToken))
+            module(
+                TestServices.create(
+                    store = store,
+                    inbox = inbox,
+                    policies = generous,
+                    metrics = metrics,
+                    metricsToken = metricsToken,
+                ),
+            )
         }
     }
 
@@ -115,6 +127,41 @@ class MetricsRoutesTest {
             val body = client.awaitMetrics("valence_queue_depth 3", "valence_active_connections 0")
 
             assertTrue(body.contains("# TYPE valence_queue_depth gauge"))
+            assertFalse(body.contains("valence_hikari_"))
+        }
+
+    @Test
+    fun `the metrics endpoint exposes database pool gauges and counters`() =
+        testApplication {
+            val metrics =
+                ServerMetrics().apply {
+                    attachDatabasePoolMetrics(
+                        DatabasePoolMetrics {
+                            DatabasePoolMetricsSnapshot(
+                                activeConnections = 1,
+                                idleConnections = 2,
+                                totalConnections = 3,
+                                maxConnections = 4,
+                                threadsAwaitingConnection = 0,
+                                connectionAcquireAttempts = 5,
+                                connectionAcquireNanos = 6,
+                                connectionTimeouts = 0,
+                            )
+                        },
+                    )
+                }
+            start(metrics = metrics)
+
+            val body = client.metrics().bodyAsText()
+
+            assertTrue(body.contains("valence_hikari_connections_active 1"))
+            assertTrue(body.contains("valence_hikari_connections_idle 2"))
+            assertTrue(body.contains("valence_hikari_connections_total 3"))
+            assertTrue(body.contains("valence_hikari_connections_max 4"))
+            assertTrue(body.contains("valence_hikari_threads_awaiting_connection 0"))
+            assertTrue(body.contains("valence_hikari_connection_acquire_attempts_total 5"))
+            assertTrue(body.contains("valence_hikari_connection_acquire_nanos_total 6"))
+            assertTrue(body.contains("valence_hikari_connection_timeouts_total 0"))
         }
 
     @Test

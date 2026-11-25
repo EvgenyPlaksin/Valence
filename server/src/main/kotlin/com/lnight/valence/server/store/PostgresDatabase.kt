@@ -3,6 +3,7 @@ package com.lnight.valence.server.store
 import com.lnight.valence.server.DatabaseConfiguration
 import com.lnight.valence.server.DefaultDispatcherProvider
 import com.lnight.valence.server.DispatcherProvider
+import com.lnight.valence.server.domain.DatabasePoolMetrics
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.CoroutineDispatcher
@@ -15,6 +16,7 @@ import java.sql.SQLException
 class PostgresDatabase private constructor(
     internal val dataSource: HikariDataSource,
     val dispatcher: CoroutineDispatcher,
+    internal val poolMetrics: DatabasePoolMetrics,
 ) : Closeable {
     val mailboxStore = PostgresMailboxStore(dataSource, dispatcher)
     val inboxStore = PostgresInboxStore(dataSource, dispatcher)
@@ -42,6 +44,7 @@ class PostgresDatabase private constructor(
             dispatcherProvider: DispatcherProvider = DefaultDispatcherProvider(),
         ): PostgresDatabase {
             val dispatcher = dispatcherProvider.database(configuration.maxConnections)
+            val poolMetrics = HikariPoolMetrics()
             val dataSource =
                 HikariDataSource(
                     HikariConfig().apply {
@@ -51,8 +54,10 @@ class PostgresDatabase private constructor(
                         maximumPoolSize = configuration.maxConnections
                         minimumIdle = minOf(configuration.maxConnections, 2)
                         poolName = "valence-postgres"
+                        metricsTrackerFactory = poolMetrics
                     },
                 )
+            poolMetrics.attach(dataSource)
             try {
                 val flyway =
                     Flyway
@@ -79,7 +84,7 @@ class PostgresDatabase private constructor(
                         )
                     }
                 }
-                return PostgresDatabase(dataSource, dispatcher)
+                return PostgresDatabase(dataSource, dispatcher, poolMetrics)
             } catch (failure: FlywayException) {
                 dataSource.close()
                 throw failure

@@ -309,6 +309,51 @@ if max_lock_waiters or max_deadlocks:
 PY
 }
 
+verify_hikari_metrics() {
+    python3 - "${RUN_DIR}" <<'PY'
+import glob
+import os
+import re
+import sys
+
+run_dir = sys.argv[1]
+paths = sorted(glob.glob(os.path.join(run_dir, "node_[ab]_metrics*.txt")))
+if not paths:
+    raise SystemExit("No per-node metrics snapshots were found")
+
+required = (
+    "valence_hikari_connections_active",
+    "valence_hikari_connections_idle",
+    "valence_hikari_connections_total",
+    "valence_hikari_connections_max",
+    "valence_hikari_threads_awaiting_connection",
+    "valence_hikari_connection_acquire_attempts_total",
+    "valence_hikari_connection_acquire_nanos_total",
+    "valence_hikari_connection_timeouts_total",
+)
+for path in paths:
+    metrics = {}
+    with open(path, encoding="utf-8") as metrics_file:
+        for line in metrics_file:
+            match = re.match(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)\s+([0-9]+)$", line.strip())
+            if match:
+                metrics[match.group(1)] = int(match.group(2))
+    missing = [name for name in required if name not in metrics]
+    if missing:
+        raise SystemExit(f"Missing Hikari metrics in {os.path.basename(path)}: {', '.join(missing)}")
+    waiters = metrics["valence_hikari_threads_awaiting_connection"]
+    timeouts = metrics["valence_hikari_connection_timeouts_total"]
+    if metrics["valence_hikari_connections_max"] < 1:
+        raise SystemExit(f"Invalid Hikari maximum pool size in {os.path.basename(path)}")
+    if waiters != 0 or timeouts != 0:
+        raise SystemExit(
+            f"Hikari contention in {os.path.basename(path)}: waiters={waiters} timeouts={timeouts}"
+        )
+
+print(f"Hikari waiters=0 and connection timeouts=0 across {len(paths)} snapshots")
+PY
+}
+
 sample_telemetry() {
     while true; do
         sleep 20
@@ -384,7 +429,11 @@ if [ "${MODE}" = "soak" ] || [ "${MODE}" = "all" ]; then
     curl -fsS -H "Authorization: Bearer ${METRICS_TOKEN}" "http://127.0.0.1:18082/metrics" > "${RUN_DIR}/node_b_metrics_soak_final.txt"
 
     echo "=== Testing SIGTERM Drain Window ==="
-    curl -fsS "http://127.0.0.1:18081/ready" > /dev/null
+    ready_before="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:18081/ready")"
+    if [ "${ready_before}" != "200" ]; then
+        echo "Node A was not ready before the SIGTERM test" >&2
+        exit 1
+    fi
     run_k6 "drain" 1 60 0 > "${RUN_DIR}/k6_drain.log" 2>&1 &
     drain_pid=$!
     socket_ready=0
@@ -402,16 +451,22 @@ if [ "${MODE}" = "soak" ] || [ "${MODE}" = "all" ]; then
         echo "Drain WebSocket did not connect to node A" >&2
         exit 1
     fi
-    docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" kill -s SIGTERM server
     READY_FILE="${RUN_DIR}/sigterm_ready_window.csv"
     printf 'sampled_at,status\n' > "${READY_FILE}"
+    printf 'before_sigterm,%s\n' "${ready_before}" >> "${READY_FILE}"
+    docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" kill -s SIGTERM server
     for _ in $(seq 1 50); do
         status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 1 "http://127.0.0.1:18081/ready" || printf '000')"
         printf '%s,%s\n' "$(date --iso-8601=milliseconds)" "${status}" >> "${READY_FILE}"
         sleep 0.2
     done
-    ready_200_count="$(awk -F, '$2 == 200 { count++ } END { print count + 0 }' "${READY_FILE}")"
-    echo "Node A /ready samples during SIGTERM: 200=${ready_200_count} total=50; drain WebSocket must close with 1001"
+    ready_200_count="$(awk -F, 'NR > 1 && $2 == 200 { count++ } END { print count + 0 }' "${READY_FILE}")"
+    ready_503_count="$(awk -F, '$2 == 503 { count++ } END { print count + 0 }' "${READY_FILE}")"
+    echo "Node A /ready before SIGTERM=${ready_before}; during SIGTERM: 200=${ready_200_count} 503=${ready_503_count}; drain WebSocket must close with 1001"
+    if [ "${ready_503_count}" -lt 1 ]; then
+        echo "Node A /ready never returned 503 during the drain window" >&2
+        exit 1
+    fi
     if ! wait "${drain_pid}"; then
         echo "Drain k6 scenario failed; see ${RUN_DIR}/k6_drain.log" >&2
         exit 1
@@ -446,6 +501,7 @@ verify_db_waiters
 
 curl -fs -H "Authorization: Bearer ${METRICS_TOKEN}" "http://127.0.0.1:18081/metrics" > "${RUN_DIR}/node_a_metrics.txt"
 curl -fs -H "Authorization: Bearer ${METRICS_TOKEN}" "http://127.0.0.1:18082/metrics" > "${RUN_DIR}/node_b_metrics.txt"
+verify_hikari_metrics
 if [[ "${MODE}" == "all" || "${MODE}" == "soak" ]]; then
     purged_a="$(awk '$1 == "valence_messages_purged_total" { print $2 }' "${RUN_DIR}/node_a_metrics_soak_final.txt")"
     purged_b="$(awk '$1 == "valence_messages_purged_total" { print $2 }' "${RUN_DIR}/node_b_metrics_soak_final.txt")"

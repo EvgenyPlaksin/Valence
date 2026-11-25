@@ -17,8 +17,21 @@ object ServerConfig {
     const val REDIS_CHANNEL_PREFIX_VARIABLE = "VALENCE_REDIS_CHANNEL_PREFIX"
     const val TRUST_PROXY_HEADERS_VARIABLE = "VALENCE_TRUST_PROXY_HEADERS"
     const val METRICS_TOKEN_VARIABLE = "VALENCE_METRICS_TOKEN"
+    internal const val SHUTDOWN_DRAIN_MS_VARIABLE = "VALENCE_SHUTDOWN_DRAIN_MS"
     private const val MINIMUM_METRICS_TOKEN_LENGTH = 16
     private const val DEFAULT_DATABASE_MAX_CONNECTIONS = 10
+    internal const val MAX_SHUTDOWN_DRAIN_MILLIS = 60_000L
+
+    internal fun shutdownDrainMillis(environment: Map<String, String> = System.getenv()): Long {
+        val value = environment[SHUTDOWN_DRAIN_MS_VARIABLE] ?: return 0L
+        val millis =
+            value.toLongOrNull()
+                ?: error("$SHUTDOWN_DRAIN_MS_VARIABLE must be an integer between 0 and $MAX_SHUTDOWN_DRAIN_MILLIS")
+        check(millis in 0..MAX_SHUTDOWN_DRAIN_MILLIS) {
+            "$SHUTDOWN_DRAIN_MS_VARIABLE must be between 0 and $MAX_SHUTDOWN_DRAIN_MILLIS"
+        }
+        return millis
+    }
 
     fun trustProxyHeaders(environment: Map<String, String> = System.getenv()): Boolean =
         environment[TRUST_PROXY_HEADERS_VARIABLE] == "true"
