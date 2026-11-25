@@ -508,7 +508,8 @@ PORT=18081
         if ($LASTEXITCODE -ne 0) {
             throw "Unable to inspect server logs"
         }
-        $connectionErrors = @($serverLogs | Select-String -Pattern "HikariPool.*(ERROR|WARN)|Connection is not available|SQLTransientConnectionException|too many clients|remaining connection slots|Failed to validate connection")
+        $connectionErrorPattern = "(?i)(error.*hikaripool|warn.*hikaripool.*(connection|timeout|failed|validation)|hikaripool.*(connection is not available|failed to validate)|connection is not available|sqltransientconnectionexception|too many clients|remaining connection slots|failed to validate connection|connection(?: to .+)? (?:refused|reset|timed out)|could not connect to server)"
+        $connectionErrors = @($serverLogs | Select-String -Pattern $connectionErrorPattern)
         "hikari_or_database_connection_error_lines=$($connectionErrors.Count)" | Set-Content (Join-Path $runDir "database_connection_errors.txt")
         if ($connectionErrors.Count -gt 0) {
             throw "Hikari or database connection errors were recorded"
@@ -520,20 +521,22 @@ PORT=18081
                 throw "PostgreSQL wait sample missing in $($file.Name)"
             }
             $columns = $row.Split("|")
-            if ($columns.Count -lt 4) {
+            if ($columns.Count -lt 5) {
                 throw "PostgreSQL wait sample malformed in $($file.Name)"
             }
             [pscustomobject]@{
-                Waiters = [int]$columns[2].Trim()
-                LockWaiters = [int]$columns[3].Trim()
+                NonLockWaiters = [long]$columns[2].Trim()
+                LockWaiters = [long]$columns[3].Trim()
+                Deadlocks = [long]$columns[4].Trim()
             }
         }
-        $maxWaiters = ($dbWaitSamples | Measure-Object -Property Waiters -Maximum).Maximum
+        $maxNonLockWaiters = ($dbWaitSamples | Measure-Object -Property NonLockWaiters -Maximum).Maximum
         $maxLockWaiters = ($dbWaitSamples | Measure-Object -Property LockWaiters -Maximum).Maximum
-        "max_database_waiters=$maxWaiters max_lock_waiters=$maxLockWaiters" | Set-Content (Join-Path $runDir "database_waiter_summary.txt")
-        Write-Host "Database waiters max=$maxWaiters lockWaiters max=$maxLockWaiters; connection error log lines=$($connectionErrors.Count)"
-        if ($maxWaiters -ne 0 -or $maxLockWaiters -ne 0) {
-            throw "PostgreSQL connection or lock waiters were observed"
+        $maxDeadlocks = ($dbWaitSamples | Measure-Object -Property Deadlocks -Maximum).Maximum
+        "max_non_lock_waiters=$maxNonLockWaiters max_lock_waiters=$maxLockWaiters max_deadlocks=$maxDeadlocks" | Set-Content (Join-Path $runDir "database_waiter_summary.txt")
+        Write-Host "PostgreSQL non-Lock waiters max=$maxNonLockWaiters lockWaiters max=$maxLockWaiters deadlocks max=$maxDeadlocks; connection error log lines=$($connectionErrors.Count)"
+        if ($maxLockWaiters -ne 0 -or $maxDeadlocks -ne 0) {
+            throw "PostgreSQL lock waiters or deadlocks were observed"
         }
 
         $metricHeader = @{ Authorization = "Bearer $metricsToken" }

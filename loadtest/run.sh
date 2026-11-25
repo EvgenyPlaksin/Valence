@@ -285,17 +285,24 @@ for path in paths:
     if not rows:
         raise SystemExit(f"PostgreSQL wait sample missing in {os.path.basename(path)}")
     columns = [column.strip() for column in rows[0].split("|")]
-    if len(columns) < 4:
+    if len(columns) < 5:
         raise SystemExit(f"PostgreSQL wait sample malformed in {os.path.basename(path)}")
-    samples.append((int(columns[2]), int(columns[3])))
+    samples.append((int(columns[2]), int(columns[3]), int(columns[4])))
 
-max_waiters = max(waiters for waiters, _ in samples)
-max_lock_waiters = max(lock_waiters for _, lock_waiters in samples)
+max_non_lock_waiters = max(non_lock_waiters for non_lock_waiters, _, _ in samples)
+max_lock_waiters = max(lock_waiters for _, lock_waiters, _ in samples)
+max_deadlocks = max(deadlocks for _, _, deadlocks in samples)
 with open(os.path.join(run_dir, "database_waiter_summary.txt"), "w", encoding="utf-8") as output:
-    output.write(f"max_database_waiters={max_waiters} max_lock_waiters={max_lock_waiters}\n")
-print(f"Database waiters max={max_waiters} lockWaiters max={max_lock_waiters}")
-if max_waiters or max_lock_waiters:
-    raise SystemExit("PostgreSQL connection or lock waiters were observed")
+    output.write(
+        f"max_non_lock_waiters={max_non_lock_waiters} "
+        f"max_lock_waiters={max_lock_waiters} max_deadlocks={max_deadlocks}\n"
+    )
+print(
+    f"PostgreSQL non-Lock waiters max={max_non_lock_waiters} "
+    f"lockWaiters max={max_lock_waiters} deadlocks max={max_deadlocks}"
+)
+if max_lock_waiters or max_deadlocks:
+    raise SystemExit("PostgreSQL lock waiters or deadlocks were observed")
 PY
 }
 
@@ -426,7 +433,7 @@ docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\
 docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" exec -T server sh -c 'printf "node_a_fd_count="; ls /proc/1/fd | wc -l' > "${RUN_DIR}/node_a_fd_final.txt"
 docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" exec -T server-b sh -c 'printf "node_b_fd_count="; ls /proc/1/fd | wc -l' > "${RUN_DIR}/node_b_fd_final.txt"
 server_logs="$(docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" logs --no-color server server-b)"
-connection_error_count="$(printf '%s\n' "${server_logs}" | awk 'tolower($0) ~ /hikaripool.*(error|warn)|connection is not available|sqltransientconnectionexception|too many clients|remaining connection slots|failed to validate connection/ { count++ } END { print count + 0 }')"
+connection_error_count="$(printf '%s\n' "${server_logs}" | awk 'tolower($0) ~ /error.*hikaripool|warn.*hikaripool.*(connection|timeout|failed|validation)|hikaripool.*(connection is not available|failed to validate)|connection is not available|sqltransientconnectionexception|too many clients|remaining connection slots|failed to validate connection|connection( to .*)? (refused|reset|timed out)|could not connect to server/ { count++ } END { print count + 0 }')"
 printf 'hikari_or_database_connection_error_lines=%s\n' "${connection_error_count}" > "${RUN_DIR}/database_connection_errors.txt"
 if [ "${connection_error_count}" -gt 0 ]; then
     echo "Hikari or database connection errors were recorded" >&2

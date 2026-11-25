@@ -1,7 +1,14 @@
 SELECT now() AS sampled_at,
        count(*) FILTER (WHERE state = 'active') AS active_connections,
-       count(*) FILTER (WHERE state = 'active' AND wait_event_type IS NOT NULL) AS waiting_connections,
-       count(*) FILTER (WHERE state = 'active' AND wait_event_type = 'Lock') AS lock_waiters
+       count(*) FILTER (
+           WHERE state = 'active'
+             AND wait_event_type IS NOT NULL
+             AND wait_event_type <> 'Lock'
+       ) AS non_lock_waiters,
+       count(*) FILTER (WHERE state = 'active' AND wait_event_type = 'Lock') AS lock_waiters,
+       (SELECT deadlocks
+        FROM pg_stat_database
+        WHERE datname = current_database()) AS deadlocks
 FROM pg_stat_activity
 WHERE datname = current_database();
 

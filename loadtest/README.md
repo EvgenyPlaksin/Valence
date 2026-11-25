@@ -58,13 +58,17 @@ The topology defined in `compose.loadtest.yaml` includes:
 
 The runners refuse to overwrite an existing repository `.env` or reuse existing `valence-loadtest` containers/volumes. They remove generated keys, stop the test topology, and retain measurements in a unique temporary directory outside the repository. This directory contains k6 summary exports, periodic Docker resource snapshots, PostgreSQL/Redis observations, per-node metrics, and SIGTERM readiness samples; it does not contain the generated fixture manifest.
 
-The HAProxy `X-Forwarded-For` value is a synthetic address derived from `src_port`, not a real client IP. Rate-limit results therefore validate the harness path, not production client-address diversity.
+`haproxy.cfg` derives simulated `X-Forwarded-For` addresses from `src_port`, allowing one k6 container to exercise multiple client addresses for local WebSocket tests. These are not real client IPs, so this harness does not test production client-IP rate-limit diversity.
+
+The current `/metrics` endpoint does not expose Hikari pending-thread MXBean gauges. The baseline therefore checks for zero PostgreSQL `Lock` waiters, zero deadlocks, and zero Hikari/database connection errors in server logs. Other active PostgreSQL wait events are summarized as informational telemetry.
+
+For sizing future target-scale runs, the measured k6 generator footprint was about 228 MiB average / 258 MiB peak at 1,000 idle VUs, and 1,032 MiB average / 1,172 MiB peak at 5,000 idle VUs, with CPU usage up to about 203% at 5,000 VUs. Docker CPU percentages can exceed 100% when work spans multiple cores.
 
 ## Pass / Fail Criteria
 
 - **Zero Lost Messages**: All accepted sends must be delivered to resumed sockets.
 - **Zero Sequence Regressions**: `serverSeq` must be strictly increasing per connection.
-- **Connection Health**: Zero Hikari/database connection errors in server logs and zero active PostgreSQL backend waiters. Hikari pending-thread counts are not exposed by the current server metrics.
+- **Connection Health**: Zero PostgreSQL `Lock` waiters, zero deadlocks, and zero Hikari/database connection errors in server logs. Non-Lock PostgreSQL wait events are reported but do not fail the run.
 - **Error Budget**: Unexpected HTTP 5xx or WebSocket disconnects <= 0.1% (excluding expected 1001 during SIGTERM and 429 during quota saturation).
 - **Socket Fencing**: Stale confirms must close old socket with code 4000 and leave unconfirmed messages in queue.
 - **Redis Outage**: Messages continue delivery via PostgreSQL polling when Redis is paused; catch-up clears pending checks without thread exhaustion when Redis resumes.
