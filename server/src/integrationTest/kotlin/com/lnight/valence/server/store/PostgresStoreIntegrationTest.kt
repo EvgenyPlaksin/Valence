@@ -8,6 +8,8 @@ import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.NewMessage
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.SignedPublicKey
+import com.lnight.valence.server.routes.ServerMetrics
+import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -20,6 +22,8 @@ import org.junit.jupiter.api.Test
 import org.testcontainers.containers.PostgreSQLContainer
 import java.sql.DriverManager
 import java.time.Instant
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
@@ -300,6 +304,57 @@ class PostgresStoreIntegrationTest {
                         }
                     assertEquals(1, second.inboxStore.purgeExpired(2_000L))
                 }
+            }
+        }
+
+    @Test
+    fun hikariMetricsExposePoolWaitersAndClearThemAfterRelease() =
+        runTest {
+            database().use { database ->
+                val dataSource =
+                    checkNotNull(
+                        PostgresDatabase::class.java
+                            .getDeclaredField("dataSource")
+                            .apply { isAccessible = true }
+                            .get(database) as? HikariDataSource,
+                    )
+                val poolMetrics =
+                    PostgresDatabase::class.java
+                        .getDeclaredField("poolMetrics")
+                        .apply { isAccessible = true }
+                        .get(database)
+                val metrics = ServerMetrics()
+                ServerMetrics::class.java
+                    .getDeclaredField("databasePoolMetrics")
+                    .apply { isAccessible = true }
+                    .set(metrics, poolMetrics)
+                val heldConnections =
+                    (1..dataSource.hikariConfigMXBean.maximumPoolSize)
+                        .map { dataSource.connection }
+                val borrower =
+                    CompletableFuture.supplyAsync {
+                        dataSource.connection.use { true }
+                    }
+                try {
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    var waitingMetrics = metrics.render()
+                    while (!waitingMetrics.contains("valence_hikari_threads_awaiting_connection 1")) {
+                        if (System.nanoTime() >= deadline) break
+                        Thread.sleep(10)
+                        waitingMetrics = metrics.render()
+                    }
+                    assertTrue(waitingMetrics.contains("valence_hikari_connections_active 10"))
+                    assertTrue(waitingMetrics.contains("valence_hikari_threads_awaiting_connection 1"))
+
+                    heldConnections.first().close()
+                    assertTrue(borrower.get(5, TimeUnit.SECONDS))
+                } finally {
+                    heldConnections.forEach { it.close() }
+                }
+
+                val completedMetrics = metrics.render()
+                assertTrue(completedMetrics.contains("valence_hikari_connection_timeouts_total 0"))
+                assertTrue(completedMetrics.contains("valence_hikari_threads_awaiting_connection 0"))
             }
         }
 

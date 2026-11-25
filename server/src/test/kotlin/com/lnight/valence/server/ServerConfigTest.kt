@@ -162,6 +162,27 @@ class ServerConfigTest {
     }
 
     @Test
+    fun `shutdown drain duration defaults to zero and accepts bounded integers`() {
+        assertEquals(0L, ServerConfig.shutdownDrainMillis(emptyMap()))
+        assertEquals(2_000L, ServerConfig.shutdownDrainMillis(mapOf(ServerConfig.SHUTDOWN_DRAIN_MS_VARIABLE to "2000")))
+        assertEquals(
+            ServerConfig.MAX_SHUTDOWN_DRAIN_MILLIS,
+            ServerConfig.shutdownDrainMillis(
+                mapOf(ServerConfig.SHUTDOWN_DRAIN_MS_VARIABLE to ServerConfig.MAX_SHUTDOWN_DRAIN_MILLIS.toString()),
+            ),
+        )
+    }
+
+    @Test
+    fun `invalid shutdown drain durations fail fast`() {
+        listOf("-1", "60001", "1.5", "invalid").forEach { value ->
+            assertFailsWith<IllegalStateException> {
+                ServerConfig.shutdownDrainMillis(mapOf(ServerConfig.SHUTDOWN_DRAIN_MS_VARIABLE to value))
+            }
+        }
+    }
+
+    @Test
     fun `the metrics token is optional and must be long enough`() {
         assertNull(ServerConfig.metricsToken(emptyMap()))
         assertNull(ServerConfig.metricsToken(mapOf(ServerConfig.METRICS_TOKEN_VARIABLE to " ")))

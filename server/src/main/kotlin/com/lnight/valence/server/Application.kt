@@ -28,6 +28,7 @@ import com.lnight.valence.server.routes.MetricNames
 import com.lnight.valence.server.routes.PreKeyBundleResponseMapper
 import com.lnight.valence.server.routes.RegisterRequestMapper
 import com.lnight.valence.server.routes.ReplaceSignedPreKeysRequestMapper
+import com.lnight.valence.server.routes.SERVER_DRAINING
 import com.lnight.valence.server.routes.ServerMetrics
 import com.lnight.valence.server.routes.UploadOneTimePreKeysRequestMapper
 import com.lnight.valence.server.routes.accessToken
@@ -58,6 +59,7 @@ import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
 import java.time.Clock
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -68,11 +70,12 @@ private const val MAX_WEBSOCKET_FRAME_BYTES = 131_072L
 private const val PURGE_INTERVAL_MINUTES = 5L
 
 fun main() {
+    val shutdownDrainMillis = ServerConfig.shutdownDrainMillis()
     val database = PostgresDatabase.open(ServerConfig.databaseConfiguration())
     try {
         val port = System.getenv("PORT")?.toIntOrNull() ?: DEFAULT_PORT
         val services = createServices(database)
-        embeddedServer(Netty, port = port, host = "0.0.0.0") { module(services) }
+        embeddedServer(Netty, port = port, host = "0.0.0.0") { module(services, shutdownDrainMillis) }
             .start(wait = true)
     } finally {
         database.close()
@@ -93,7 +96,10 @@ private fun createServices(database: PostgresDatabase): ServerServices {
     val store = database.mailboxStore
     val inbox = database.inboxStore
     val subscriptions = MailboxSubscriptions()
-    val metrics = ServerMetrics()
+    val metrics =
+        ServerMetrics().apply {
+            attachDatabasePoolMetrics(database.poolMetrics)
+        }
     val crossNodeNotifier = RedisFanout(ServerConfig.redisConfiguration(), subscriptions, inbox, metrics)
     val authenticator = DeliveryKeyAuthenticator(store)
     val tokenKey = ServerConfig.tokenKey()
@@ -124,6 +130,23 @@ private fun createServices(database: PostgresDatabase): ServerServices {
 }
 
 fun Application.module(services: ServerServices) {
+    module(services, ServerConfig.shutdownDrainMillis())
+}
+
+internal fun Application.module(
+    services: ServerServices,
+    shutdownDrainMillis: Long,
+) {
+    require(shutdownDrainMillis in 0..ServerConfig.MAX_SHUTDOWN_DRAIN_MILLIS)
+    val draining = AtomicBoolean(false)
+    attributes.put(SERVER_DRAINING, draining)
+    installServerPlugins(services)
+    installShutdownLifecycle(services, draining, shutdownDrainMillis)
+    schedulePurge(services.purger, PURGE_INTERVAL_MINUTES.minutes, services.metrics)
+    installServerRoutes(services, draining)
+}
+
+private fun Application.installServerPlugins(services: ServerServices) {
     install(ContentNegotiation) {
         json(ProtocolJson.json)
     }
@@ -132,11 +155,6 @@ fun Application.module(services: ServerServices) {
     }
     install(metricsRecording) {
         metrics = services.metrics
-    }
-    services.crossNodeNotifier.start()
-    monitor.subscribe(ApplicationStopPreparing) {
-        services.subscriptions.shutdown()
-        services.crossNodeNotifier.close()
     }
     install(WebSockets) {
         pingPeriod = PING_PERIOD_SECONDS.seconds
@@ -148,13 +166,41 @@ fun Application.module(services: ServerServices) {
         policies = services.rateLimits
         addresses = ClientAddresses(services.trustProxyHeaders)
     }
-    schedulePurge(services.purger, PURGE_INTERVAL_MINUTES.minutes, services.metrics)
+}
+
+private fun Application.installShutdownLifecycle(
+    services: ServerServices,
+    draining: AtomicBoolean,
+    shutdownDrainMillis: Long,
+) {
+    services.crossNodeNotifier.start()
+    monitor.subscribe(ApplicationStopPreparing) {
+        synchronized(draining) { draining.set(true) }
+        waitForShutdownDrain(shutdownDrainMillis)
+        services.subscriptions.shutdown()
+        services.crossNodeNotifier.close()
+    }
+}
+
+private fun waitForShutdownDrain(shutdownDrainMillis: Long) {
+    if (shutdownDrainMillis == 0L) return
+    try {
+        Thread.sleep(shutdownDrainMillis)
+    } catch (interrupted: InterruptedException) {
+        Thread.currentThread().interrupt()
+    }
+}
+
+private fun Application.installServerRoutes(
+    services: ServerServices,
+    draining: AtomicBoolean,
+) {
     routing {
         get("/health") {
             call.respond(HealthResponse())
         }
         get("/ready") {
-            if (services.databaseReady()) {
+            if (!draining.get() && services.databaseReady()) {
                 call.respond(HealthResponse())
             } else {
                 call.respond(io.ktor.http.HttpStatusCode.ServiceUnavailable)

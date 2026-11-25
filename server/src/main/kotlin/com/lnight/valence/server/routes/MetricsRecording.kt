@@ -7,6 +7,7 @@ import io.ktor.server.application.hooks.ResponseSent
 import io.ktor.server.request.path
 
 private const val HEALTH_PATH = "/health"
+private const val READY_PATH = "/ready"
 private const val MESSAGES_PREFIX = "/v1/messages/"
 private const val PREKEYS_PREFIX = "/v1/prekeys/"
 private const val KEYS_PREFIX = "/v1/keys/"
@@ -36,6 +37,6 @@ internal fun scopeOf(path: String): String =
         path == ProtocolRoutes.SENDER_CERTIFICATE -> "certificate"
         path == ProtocolRoutes.SOCKET -> "socket"
         path == METRICS_PATH -> "metrics"
-        path == HEALTH_PATH -> "health"
+        path == HEALTH_PATH || path == READY_PATH -> "health"
         else -> "other"
     }

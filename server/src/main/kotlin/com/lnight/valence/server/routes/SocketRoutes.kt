@@ -49,6 +49,11 @@ fun Route.socketRoutes(
 ) {
     authenticate(ACCESS_TOKEN_AUTH) {
         webSocket(ProtocolRoutes.SOCKET) {
+            val draining = call.application.attributes[SERVER_DRAINING]
+            if (synchronized(draining) { draining.get() }) {
+                close(CloseReason(CloseReason.Codes.GOING_AWAY, "server shutting down"))
+                return@webSocket
+            }
             val principal =
                 checkNotNull(call.principal<MailboxPrincipal>()) { "Authenticated route without a principal" }
             val generation = socketState.advanceSocketGeneration(principal.mailboxId)
