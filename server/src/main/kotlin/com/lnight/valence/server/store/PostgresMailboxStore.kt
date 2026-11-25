@@ -1,5 +1,6 @@
 package com.lnight.valence.server.store
 
+import com.lnight.valence.server.domain.BundleResult
 import com.lnight.valence.server.domain.KeyStoreOutcome
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.MailboxStore
@@ -7,9 +8,11 @@ import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PreKeyBundle
 import com.lnight.valence.server.domain.PreKeyCounts
+import com.lnight.valence.server.domain.RateLimitDecision
 import com.lnight.valence.server.domain.SignedPublicKey
 import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.CoroutineDispatcher
+import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.Timestamp
@@ -168,6 +171,20 @@ class PostgresMailboxStore(
             KeyStoreOutcome.UPDATED
         }
 
+    override suspend fun replaceDeliveryKeyHash(
+        mailboxId: String,
+        deliveryKeyHash: ByteArray,
+    ): Boolean =
+        dataSource.inTransaction(dispatcher) { connection ->
+            connection
+                .prepareStatement("UPDATE mailbox SET delivery_key_hash = ? WHERE mailbox_id = ?")
+                .use { statement ->
+                    statement.setBytes(1, deliveryKeyHash)
+                    statement.setString(2, mailboxId)
+                    statement.executeUpdate() == 1
+                }
+        }
+
     override suspend fun addOneTimeKyberPreKeys(
         mailboxId: String,
         keys: List<OneTimeKyberPreKey>,
@@ -251,7 +268,11 @@ class PostgresMailboxStore(
             KeyStoreOutcome.UPDATED
         }
 
-    override suspend fun takeBundle(mailboxId: String): PreKeyBundle? =
+    override suspend fun takeBundle(
+        mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
+        rateLimit: () -> RateLimitDecision,
+    ): BundleResult =
         dataSource.inTransaction(dispatcher) { connection ->
             val mailbox =
                 connection.prepareStatement("$SELECT_MAILBOX WHERE mailbox_id = ? FOR UPDATE").use { statement ->
@@ -259,17 +280,24 @@ class PostgresMailboxStore(
                     statement.executeQuery().use { result ->
                         if (result.next()) result.mailbox() else null
                     }
-                } ?: return@inTransaction null
-            val oneTimePreKey =
-                takeOneTimePreKey(connection, mailboxId)
-            val oneTimeKyberPreKey =
-                takeOneTimeKyberPreKey(connection, mailboxId)
-            PreKeyBundle(
-                mailbox.identityKey,
-                mailbox.signedPreKey,
-                mailbox.kyberPreKey,
-                oneTimePreKey,
-                oneTimeKyberPreKey,
+                }
+            val storedHash = mailbox?.deliveryKeyHash ?: ByteArray(com.lnight.valence.server.domain.WireSizes.HASH)
+            val deliveryKeyMatches = MessageDigest.isEqual(expectedDeliveryKeyHash, storedHash)
+            if (mailbox == null || !deliveryKeyMatches) return@inTransaction BundleResult.Unauthorized
+            when (val decision = rateLimit()) {
+                is RateLimitDecision.Limited -> return@inTransaction BundleResult.RateLimited(decision.retryAfterMillis)
+                RateLimitDecision.Allowed -> Unit
+            }
+            val oneTimePreKey = takeOneTimePreKey(connection, mailboxId)
+            val oneTimeKyberPreKey = takeOneTimeKyberPreKey(connection, mailboxId)
+            BundleResult.Found(
+                PreKeyBundle(
+                    mailbox.identityKey,
+                    mailbox.signedPreKey,
+                    mailbox.kyberPreKey,
+                    oneTimePreKey,
+                    oneTimeKyberPreKey,
+                ),
             )
         }
 

@@ -23,6 +23,7 @@ import com.lnight.valence.server.domain.SenderCertificateService
 import com.lnight.valence.server.domain.TokenBucketRateLimiter
 import com.lnight.valence.server.routes.AuthTokenRequestMapper
 import com.lnight.valence.server.routes.ClientAddresses
+import com.lnight.valence.server.routes.DeliveryKeyHashMapper
 import com.lnight.valence.server.routes.MessageDeliverFrameMapper
 import com.lnight.valence.server.routes.MetricNames
 import com.lnight.valence.server.routes.PreKeyBundleResponseMapper
@@ -30,6 +31,7 @@ import com.lnight.valence.server.routes.RegisterRequestMapper
 import com.lnight.valence.server.routes.ReplaceSignedPreKeysRequestMapper
 import com.lnight.valence.server.routes.SERVER_DRAINING
 import com.lnight.valence.server.routes.ServerMetrics
+import com.lnight.valence.server.routes.UpdateDeliveryKeyRequestMapper
 import com.lnight.valence.server.routes.UploadOneTimeKyberPreKeysRequestMapper
 import com.lnight.valence.server.routes.UploadOneTimePreKeysRequestMapper
 import com.lnight.valence.server.routes.accessToken
@@ -196,6 +198,7 @@ private fun Application.installServerRoutes(
     services: ServerServices,
     draining: AtomicBoolean,
 ) {
+    val deliveryKeyHashMapper = DeliveryKeyHashMapper()
     routing {
         get("/health") {
             call.respond(HealthResponse())
@@ -208,13 +211,14 @@ private fun Application.installServerRoutes(
             }
         }
         authRoutes(services.challenges)
-        registrationRoutes(services.registration, RegisterRequestMapper())
+        registrationRoutes(services.registration, RegisterRequestMapper(deliveryKeyHashMapper))
         loginRoutes(services.login, AuthTokenRequestMapper())
         keyRoutes(
             services.keys,
             ReplaceSignedPreKeysRequestMapper(),
             UploadOneTimePreKeysRequestMapper(),
             UploadOneTimeKyberPreKeysRequestMapper(),
+            UpdateDeliveryKeyRequestMapper(deliveryKeyHashMapper),
         )
         preKeyRoutes(services.bundles, PreKeyBundleResponseMapper())
         messageRoutes(services.messages)

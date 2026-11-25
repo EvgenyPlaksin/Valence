@@ -1,10 +1,18 @@
 package com.lnight.valence.server.domain
 
 interface InboxStore {
+    suspend fun authorize(
+        mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
+        rateLimit: () -> RateLimitDecision,
+    ): DeliveryAuthorizationResult
+
     suspend fun append(
         mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
         message: NewMessage,
         maxQueued: Int,
+        rateLimit: () -> RateLimitDecision = { RateLimitDecision.Allowed },
     ): AppendResult
 
     suspend fun messagesAfter(

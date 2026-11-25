@@ -2,30 +2,78 @@ package com.lnight.valence.server.store
 
 import com.lnight.valence.server.domain.AppendResult
 import com.lnight.valence.server.domain.ConfirmResult
+import com.lnight.valence.server.domain.DeliveryAuthorizationResult
 import com.lnight.valence.server.domain.InboxPollResult
 import com.lnight.valence.server.domain.InboxStore
 import com.lnight.valence.server.domain.NewMessage
 import com.lnight.valence.server.domain.QueuedMessage
+import com.lnight.valence.server.domain.RateLimitDecision
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
-class InMemoryInboxStore : InboxStore {
+class InMemoryInboxStore(
+    private val currentDeliveryKeyHash: ((String) -> ByteArray?)? = null,
+) : InboxStore {
     private val queues = ConcurrentHashMap<String, Queue>()
+
+    override suspend fun authorize(
+        mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
+        rateLimit: () -> RateLimitDecision,
+    ): DeliveryAuthorizationResult {
+        val storedHash = currentDeliveryKeyHash?.invoke(mailboxId)
+        if (
+            currentDeliveryKeyHash != null &&
+            (storedHash == null || !MessageDigest.isEqual(expectedDeliveryKeyHash, storedHash))
+        ) {
+            return DeliveryAuthorizationResult.Unauthorized
+        }
+        return when (val decision = rateLimit()) {
+            RateLimitDecision.Allowed -> DeliveryAuthorizationResult.Authorized
+            is RateLimitDecision.Limited -> DeliveryAuthorizationResult.RateLimited(decision.retryAfterMillis)
+        }
+    }
 
     override suspend fun append(
         mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
         message: NewMessage,
         maxQueued: Int,
+        rateLimit: () -> RateLimitDecision,
     ): AppendResult {
         val queue = queues.computeIfAbsent(mailboxId) { Queue() }
         return synchronized(queue) {
+            val storedHash = currentDeliveryKeyHash?.invoke(mailboxId)
+            if (
+                currentDeliveryKeyHash != null &&
+                (
+                    storedHash == null ||
+                        !MessageDigest.isEqual(expectedDeliveryKeyHash, storedHash)
+                )
+            ) {
+                return@synchronized AppendResult.Unauthorized
+            }
             queue.messages.removeAll { it.expiresAtMillis <= message.serverTsMillis }
-            if (queue.messages.size >= maxQueued) {
-                AppendResult.QuotaExceeded
-            } else {
-                queue.lastSeq += 1
-                queue.messages +=
-                    QueuedMessage(queue.lastSeq, message.serverTsMillis, message.envelope, message.expiresAtMillis)
-                AppendResult.Appended(queue.lastSeq)
+            when (val decision = rateLimit()) {
+                is RateLimitDecision.Limited -> {
+                    AppendResult.RateLimited(decision.retryAfterMillis)
+                }
+
+                RateLimitDecision.Allowed -> {
+                    if (queue.messages.size >= maxQueued) {
+                        AppendResult.QuotaExceeded
+                    } else {
+                        queue.lastSeq += 1
+                        queue.messages +=
+                            QueuedMessage(
+                                queue.lastSeq,
+                                message.serverTsMillis,
+                                message.envelope,
+                                message.expiresAtMillis,
+                            )
+                        AppendResult.Appended(queue.lastSeq)
+                    }
+                }
             }
         }
     }

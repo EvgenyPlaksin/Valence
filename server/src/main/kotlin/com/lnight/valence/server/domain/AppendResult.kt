@@ -6,4 +6,10 @@ sealed interface AppendResult {
     ) : AppendResult
 
     data object QuotaExceeded : AppendResult
+
+    data object Unauthorized : AppendResult
+
+    data class RateLimited(
+        val retryAfterMillis: Long,
+    ) : AppendResult
 }

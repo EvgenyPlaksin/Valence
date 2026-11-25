@@ -3,8 +3,10 @@ package com.lnight.valence.server.routes
 import com.lnight.valence.protocol.ProtocolRoutes
 import com.lnight.valence.protocol.http.KeyStatusResponse
 import com.lnight.valence.protocol.http.ReplaceSignedPreKeysRequest
+import com.lnight.valence.protocol.http.UpdateDeliveryKeyRequest
 import com.lnight.valence.protocol.http.UploadOneTimeKyberPreKeysRequest
 import com.lnight.valence.protocol.http.UploadOneTimePreKeysRequest
+import com.lnight.valence.server.domain.DeliveryKeyUpdateResult
 import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.KeyUpdateRejection
 import com.lnight.valence.server.domain.KeyUpdateResult
@@ -24,6 +26,7 @@ fun Route.keyRoutes(
     signedMapper: ReplaceSignedPreKeysRequestMapper,
     oneTimeMapper: UploadOneTimePreKeysRequestMapper,
     oneTimeKyberMapper: UploadOneTimeKyberPreKeysRequestMapper,
+    deliveryKeyMapper: UpdateDeliveryKeyRequestMapper,
 ) {
     authenticate(ACCESS_TOKEN_AUTH) {
         get(ProtocolRoutes.KEYS_STATUS) {
@@ -39,6 +42,7 @@ fun Route.keyRoutes(
                 )
             }
         }
+        deliveryKeyRotationRoute(service, deliveryKeyMapper)
         put(ProtocolRoutes.KEYS_SIGNED) {
             val replacement =
                 Parsing
@@ -76,6 +80,23 @@ fun Route.keyRoutes(
                     ),
                 )
             }
+        }
+    }
+}
+
+private fun Route.deliveryKeyRotationRoute(
+    service: KeyManagementService,
+    mapper: UpdateDeliveryKeyRequestMapper,
+) {
+    put(ProtocolRoutes.KEYS_DELIVERY) {
+        val hash =
+            Parsing
+                .decode(call.receiveText(), UpdateDeliveryKeyRequest.serializer()) { it.v }
+                ?.let(mapper::toDomain)
+        when (val result = hash?.let { service.updateDeliveryKeyHash(call.mailboxId, it) }) {
+            DeliveryKeyUpdateResult.Updated -> call.respond(HttpStatusCode.NoContent)
+            DeliveryKeyUpdateResult.UnknownMailbox -> call.respond(HttpStatusCode.Unauthorized)
+            DeliveryKeyUpdateResult.Malformed, null -> call.respond(HttpStatusCode.BadRequest)
         }
     }
 }

@@ -2,6 +2,7 @@ package com.lnight.valence.protocol
 
 import com.lnight.valence.protocol.http.KeyStatusResponse
 import com.lnight.valence.protocol.http.ReplaceSignedPreKeysRequest
+import com.lnight.valence.protocol.http.UpdateDeliveryKeyRequest
 import com.lnight.valence.protocol.http.UploadOneTimeKyberPreKeysRequest
 import com.lnight.valence.protocol.http.UploadOneTimePreKeysRequest
 import kotlin.test.Test
@@ -23,6 +24,15 @@ class KeyManagementContractTest {
 
         assertEquals(2, request.signedPreKey.id)
         assertEquals(2, request.kyberPreKey.id)
+    }
+
+    @Test
+    fun `update delivery key request matches its fixture`() {
+        val request =
+            ContractAssertions.roundTrip("update-delivery-key-request", UpdateDeliveryKeyRequest.serializer())
+
+        assertEquals(2, request.v)
+        assertEquals(32, com.lnight.valence.protocol.Base64Url.decode(request.deliveryKeyHash).size)
     }
 
     @Test

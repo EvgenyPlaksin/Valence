@@ -6,6 +6,7 @@ import com.lnight.valence.protocol.ProtocolJson
 import com.lnight.valence.protocol.ProtocolRoutes
 import com.lnight.valence.protocol.frame.DeliveryConfirmFrame
 import com.lnight.valence.protocol.frame.SyncResumeFrame
+import com.lnight.valence.protocol.http.UpdateDeliveryKeyRequest
 import com.lnight.valence.server.domain.DatabasePoolMetrics
 import com.lnight.valence.server.domain.DatabasePoolMetricsSnapshot
 import com.lnight.valence.server.domain.NewMessage
@@ -20,6 +21,7 @@ import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -51,7 +53,9 @@ class MetricsRoutesTest {
     ) {
         val inbox = InMemoryInboxStore()
         kotlinx.coroutines.runBlocking {
-            (1..messages).forEach { inbox.append(id, NewMessage(byteArrayOf(it.toByte()), now, now + 60_000L), 1_000) }
+            (1..messages).forEach {
+                inbox.append(id, ByteArray(32) { 9 }, NewMessage(byteArrayOf(it.toByte()), now, now + 60_000L), 1_000)
+            }
         }
         val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox())
         application {
@@ -175,9 +179,27 @@ class MetricsRoutesTest {
             }
             client.get("/v1/prekeys/$id") { header(ProtocolHeaders.DELIVERY_KEY, deliveryKey) }
             client.get(ProtocolRoutes.KEYS_STATUS) { bearerAuth(FakeAccessTokens.bearer(id)) }
+            val rotationResponse =
+                client.put(ProtocolRoutes.KEYS_DELIVERY) {
+                    bearerAuth(FakeAccessTokens.bearer(id))
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        ProtocolJson.json.encodeToString(
+                            UpdateDeliveryKeyRequest.serializer(),
+                            UpdateDeliveryKeyRequest(deliveryKeyHash = Base64Url.encode(ByteArray(32))),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.NoContent, rotationResponse.status)
 
-            val body = client.awaitMetrics("""scope="bundle"""", """scope="keys"""", """scope="send"""")
+            val body =
+                client.awaitMetrics(
+                    """scope="bundle"""",
+                    """scope="keys"""",
+                    """scope="send"""",
+                )
 
+            assertTrue(body.contains("""valence_http_responses_total{scope="keys",status="204"} 1"""), body)
             assertFalse(body.contains(id))
             assertFalse(body.contains("mbx_"))
             assertFalse(body.contains(deliveryKey))

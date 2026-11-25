@@ -9,6 +9,7 @@ object ProtocolRoutes {
     const val AUTH_TOKEN = "/v1/auth/token"
     const val KEYS_STATUS = "/v1/keys/status"
     const val KEYS_SIGNED = "/v1/keys/signed"
+    const val KEYS_DELIVERY = "/v1/keys/delivery"
     const val KEYS_ONE_TIME = "/v1/keys/one-time"
     const val KEYS_KYBER_ONE_TIME = "/v1/keys/kyber-one-time"
     const val SOCKET = "/v1/socket"

@@ -167,6 +167,8 @@ Each socket connection advances the mailbox's PostgreSQL generation. Confirms fr
 
 For one-time Kyber prekeys, apply V3 and deploy the Kyber-capable server to every node before enabling client uploads. The migration is additive and older binaries can run against the new schema, but they ignore `oneTimeKyberPreKeys` during registration and do not implement `POST /v1/keys/kyber-one-time`. Keep the client feature disabled until all server nodes support the endpoint; disable client uploads before rolling back to older server binaries.
 
+For delivery-key rotation, deploy the server version that supports JWT-authenticated `PUT /v1/keys/delivery` to every node before enabling client rotation. Older binaries return 404 for this endpoint. No migration is required because rotation replaces the existing `mailbox.delivery_key_hash`; after a successful 204, the old key is rejected immediately by sends and bundle fetches. Offline contacts pause retries on 401 while retaining their stored envelope until they receive the encrypted rotation notice, re-import the invite/QR, or cancel the pending item; unrecovered items expire after 30 days.
+
 Budget the database connection pool across the fleet:
 
 ```text

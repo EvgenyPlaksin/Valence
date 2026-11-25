@@ -15,7 +15,7 @@ class InMemoryInboxStoreReceiveTest {
         count: Int,
         expiresAt: Long = 100_000L,
     ) = InMemoryInboxStore().also { store ->
-        repeat(count) { store.append(id, NewMessage(ByteArray(1), 1_000L, expiresAt), 1_000) }
+        repeat(count) { store.append(id, ByteArray(32), NewMessage(ByteArray(1), 1_000L, expiresAt), 1_000) }
     }
 
     private suspend fun InMemoryInboxStore.sequence() = messagesAfter(id, 0).map { it.serverSeq }
@@ -69,7 +69,7 @@ class InMemoryInboxStoreReceiveTest {
             val store = store(3)
             store.confirm(id, 0, 3)
 
-            val result = store.append(id, NewMessage(ByteArray(1), 1_000L, 100_000L), 1_000)
+            val result = store.append(id, ByteArray(32), NewMessage(ByteArray(1), 1_000L, 100_000L), 1_000)
 
             assertEquals(4L, assertIs<AppendResult.Appended>(result).serverSeq)
         }

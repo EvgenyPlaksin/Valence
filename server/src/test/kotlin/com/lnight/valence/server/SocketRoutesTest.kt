@@ -53,7 +53,9 @@ class SocketRoutesTest {
         policies: RateLimitPolicies = RateLimitPolicies(),
     ): InMemoryInboxStore {
         val inbox = InMemoryInboxStore()
-        (1..messages).forEach { inbox.append(id, NewMessage(byteArrayOf(it.toByte()), now, now + 60_000L), 1_000) }
+        (1..messages).forEach {
+            inbox.append(id, ByteArray(32) { 9 }, NewMessage(byteArrayOf(it.toByte()), now, now + 60_000L), 1_000)
+        }
         val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox())
         application { module(TestServices.create(store = store, inbox = inbox, policies = policies)) }
         return inbox
@@ -180,8 +182,8 @@ class SocketRoutesTest {
     fun `expired messages are never delivered`() =
         testApplication {
             val inbox = start()
-            inbox.append(id, NewMessage(byteArrayOf(1), now - 10_000L, now), 1_000)
-            inbox.append(id, NewMessage(byteArrayOf(2), now, now + 60_000L), 1_000)
+            inbox.append(id, ByteArray(32) { 9 }, NewMessage(byteArrayOf(1), now - 10_000L, now), 1_000)
+            inbox.append(id, ByteArray(32) { 9 }, NewMessage(byteArrayOf(2), now, now + 60_000L), 1_000)
 
             socketClient().socket {
                 sendResume(after = 0)

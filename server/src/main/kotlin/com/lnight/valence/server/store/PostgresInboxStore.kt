@@ -2,12 +2,16 @@ package com.lnight.valence.server.store
 
 import com.lnight.valence.server.domain.AppendResult
 import com.lnight.valence.server.domain.ConfirmResult
+import com.lnight.valence.server.domain.DeliveryAuthorizationResult
 import com.lnight.valence.server.domain.InboxPollResult
 import com.lnight.valence.server.domain.InboxStore
 import com.lnight.valence.server.domain.NewMessage
 import com.lnight.valence.server.domain.QueuedMessage
+import com.lnight.valence.server.domain.RateLimitDecision
+import com.lnight.valence.server.domain.WireSizes
 import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.CoroutineDispatcher
+import java.security.MessageDigest
 import java.sql.SQLException
 import java.sql.Timestamp
 import java.time.Instant
@@ -17,12 +21,35 @@ class PostgresInboxStore(
     private val dataSource: HikariDataSource,
     private val dispatcher: CoroutineDispatcher,
 ) : InboxStore {
+    override suspend fun authorize(
+        mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
+        rateLimit: () -> RateLimitDecision,
+    ): DeliveryAuthorizationResult =
+        dataSource.inTransaction(dispatcher) { connection ->
+            val storedHash = connection.lockMailbox(mailboxId)
+            val deliveryKeyMatches =
+                MessageDigest.isEqual(expectedDeliveryKeyHash, storedHash ?: ByteArray(WireSizes.HASH))
+            if (storedHash == null || !deliveryKeyMatches) {
+                DeliveryAuthorizationResult.Unauthorized
+            } else {
+                when (val decision = rateLimit()) {
+                    RateLimitDecision.Allowed -> DeliveryAuthorizationResult.Authorized
+                    is RateLimitDecision.Limited -> DeliveryAuthorizationResult.RateLimited(decision.retryAfterMillis)
+                }
+            }
+        }
+
     override suspend fun append(
         mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
         message: NewMessage,
         maxQueued: Int,
+        rateLimit: () -> RateLimitDecision,
     ): AppendResult =
-        dataSource.withConnection(dispatcher) { connection -> connection.append(mailboxId, message, maxQueued) }
+        dataSource.withConnection(dispatcher) { connection ->
+            connection.append(mailboxId, expectedDeliveryKeyHash, message, maxQueued, rateLimit)
+        }
 
     override suspend fun messagesAfter(
         mailboxId: String,
@@ -190,22 +217,40 @@ class PostgresInboxStore(
     @Suppress("TooGenericExceptionCaught")
     private fun java.sql.Connection.append(
         mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
         message: NewMessage,
         maxQueued: Int,
+        rateLimit: () -> RateLimitDecision,
     ): AppendResult {
         val originalAutoCommit = autoCommit
         autoCommit = false
-        try {
-            lockMailbox(mailboxId)
-            deleteExpired(mailboxId, message.serverTsMillis)
-            if (activeMessageCount(mailboxId, message.serverTsMillis) >= maxQueued) {
-                rollback()
-                return AppendResult.QuotaExceeded
-            }
-            val sequence = incrementSequence(mailboxId)
-            insertMessage(mailboxId, sequence, message)
-            commit()
-            return AppendResult.Appended(sequence)
+        return try {
+            val storedHash = lockMailbox(mailboxId)
+            val deliveryKeyMatches =
+                MessageDigest.isEqual(expectedDeliveryKeyHash, storedHash ?: ByteArray(WireSizes.HASH))
+            val result =
+                if (storedHash == null || !deliveryKeyMatches) {
+                    AppendResult.Unauthorized
+                } else {
+                    when (val decision = rateLimit()) {
+                        is RateLimitDecision.Limited -> {
+                            AppendResult.RateLimited(decision.retryAfterMillis)
+                        }
+
+                        RateLimitDecision.Allowed -> {
+                            deleteExpired(mailboxId, message.serverTsMillis)
+                            if (activeMessageCount(mailboxId, message.serverTsMillis) >= maxQueued) {
+                                AppendResult.QuotaExceeded
+                            } else {
+                                val sequence = incrementSequence(mailboxId)
+                                insertMessage(mailboxId, sequence, message)
+                                AppendResult.Appended(sequence)
+                            }
+                        }
+                    }
+                }
+            if (result is AppendResult.Appended) commit() else rollback()
+            result
         } catch (failure: Throwable) {
             try {
                 rollback()
@@ -218,14 +263,13 @@ class PostgresInboxStore(
         }
     }
 
-    private fun java.sql.Connection.lockMailbox(mailboxId: String) {
-        prepareStatement("SELECT next_server_seq FROM mailbox WHERE mailbox_id = ? FOR UPDATE").use { statement ->
+    private fun java.sql.Connection.lockMailbox(mailboxId: String): ByteArray? =
+        prepareStatement("SELECT delivery_key_hash FROM mailbox WHERE mailbox_id = ? FOR UPDATE").use { statement ->
             statement.setString(1, mailboxId)
             statement.executeQuery().use { result ->
-                check(result.next()) { "Inbox append attempted for an unknown mailbox" }
+                if (result.next()) result.getBytes("delivery_key_hash") else null
             }
         }
-    }
 
     private fun java.sql.Connection.deleteExpired(
         mailboxId: String,

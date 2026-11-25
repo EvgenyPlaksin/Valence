@@ -104,6 +104,7 @@ class PreKeyRoutesTest {
             val response = client.fetch(key = Base64Url.encode(ByteArray(16) { 4 }))
 
             assertEquals(HttpStatusCode.Unauthorized, response.status)
+            assertEquals("", response.bodyAsText())
             assertEquals(2, store.oneTimePreKeyCount(id))
             assertEquals(2, store.oneTimeKyberPreKeyCount(id))
         }

@@ -20,19 +20,21 @@ class SendMessageService(
         val mailbox =
             authenticator.authenticate(mailboxId, deliveryKey)
                 ?: return SendResult.Rejected(SendRejection.UNAUTHORIZED)
-        return when (val decision = limiter.tryAcquire("send:mailbox:${mailbox.id}", mailboxPolicy)) {
-            is RateLimitDecision.Limited -> SendResult.RateLimited(decision.retryAfterMillis)
-            RateLimitDecision.Allowed -> accept(mailbox.id, envelope, ttlSeconds)
-        }
-    }
-
-    private suspend fun accept(
-        mailboxId: String,
-        envelope: ByteArray,
-        ttlSeconds: Long?,
-    ): SendResult {
         val rejection = requestRejection(envelope, ttlSeconds)
-        return if (rejection != null) SendResult.Rejected(rejection) else append(mailboxId, envelope, ttlSeconds)
+        return if (rejection == null) {
+            append(mailbox, envelope, ttlSeconds)
+        } else {
+            when (
+                val authorization =
+                    inbox.authorize(mailbox.id, mailbox.deliveryKeyHash) {
+                        limiter.tryAcquire("send:mailbox:${mailbox.id}", mailboxPolicy)
+                    }
+            ) {
+                DeliveryAuthorizationResult.Authorized -> SendResult.Rejected(rejection)
+                DeliveryAuthorizationResult.Unauthorized -> SendResult.Rejected(SendRejection.UNAUTHORIZED)
+                is DeliveryAuthorizationResult.RateLimited -> SendResult.RateLimited(authorization.retryAfterMillis)
+            }
+        }
     }
 
     private fun requestRejection(
@@ -54,21 +56,37 @@ class SendMessageService(
         }
 
     private suspend fun append(
-        mailboxId: String,
+        mailbox: Mailbox,
         envelope: ByteArray,
         ttlSeconds: Long?,
     ): SendResult {
         val now = clock.millis()
         val ttl = minOf(ttlSeconds ?: MessageLimits.MAX_TTL_SECONDS, MessageLimits.MAX_TTL_SECONDS)
         val message = NewMessage(envelope, now, now + Duration.ofSeconds(ttl).toMillis())
-        return when (inbox.append(mailboxId, message, MessageLimits.MAX_QUEUED_PER_MAILBOX)) {
+        return when (
+            val result =
+                inbox.append(
+                    mailbox.id,
+                    mailbox.deliveryKeyHash,
+                    message,
+                    MessageLimits.MAX_QUEUED_PER_MAILBOX,
+                ) { limiter.tryAcquire("send:mailbox:${mailbox.id}", mailboxPolicy) }
+        ) {
             is AppendResult.Appended -> {
-                notifier.messageStored(mailboxId)
+                notifier.messageStored(mailbox.id)
                 SendResult.Accepted(now)
             }
 
             AppendResult.QuotaExceeded -> {
                 SendResult.Rejected(SendRejection.QUOTA_EXCEEDED)
+            }
+
+            AppendResult.Unauthorized -> {
+                SendResult.Rejected(SendRejection.UNAUTHORIZED)
+            }
+
+            is AppendResult.RateLimited -> {
+                SendResult.RateLimited(result.retryAfterMillis)
             }
         }
     }

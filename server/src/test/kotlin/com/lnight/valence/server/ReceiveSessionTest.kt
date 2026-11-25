@@ -22,7 +22,7 @@ class ReceiveSessionTest {
     private suspend fun add(
         count: Int = 1,
         expiresAt: Long = now + 60_000L,
-    ) = repeat(count) { inbox.append(id, NewMessage(ByteArray(1), now, expiresAt), 1_000) }
+    ) = repeat(count) { inbox.append(id, ByteArray(32), NewMessage(ByteArray(1), now, expiresAt), 1_000) }
 
     private suspend fun batch() = session.nextBatch().map { it.serverSeq }
 
