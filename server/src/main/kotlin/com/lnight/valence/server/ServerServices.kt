@@ -32,6 +32,7 @@ data class ServerServices(
     val trustProxyHeaders: Boolean,
     val purger: InboxPurger,
     val inbox: InboxStore,
+    val crossNodeNotifier: CrossNodeNotifier = LocalCrossNodeNotifier(),
     val metrics: ServerMetrics,
     val metricsToken: String?,
     val databaseReady: suspend () -> Boolean = { true },

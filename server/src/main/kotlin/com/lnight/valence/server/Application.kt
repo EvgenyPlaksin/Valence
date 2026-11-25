@@ -93,6 +93,8 @@ private fun createServices(database: PostgresDatabase): ServerServices {
     val store = database.mailboxStore
     val inbox = database.inboxStore
     val subscriptions = MailboxSubscriptions()
+    val metrics = ServerMetrics()
+    val crossNodeNotifier = RedisFanout(ServerConfig.redisConfiguration(), subscriptions, inbox, metrics)
     val authenticator = DeliveryKeyAuthenticator(store)
     val tokenKey = ServerConfig.tokenKey()
     val tokens = JwtAccessTokenIssuer(clock, tokenKey)
@@ -104,7 +106,7 @@ private fun createServices(database: PostgresDatabase): ServerServices {
         login = LoginService(challenges, keyVerifier, store, tokens),
         keys = KeyManagementService(keyVerifier, store),
         bundles = PreKeyBundleService(authenticator, store, limiter, policies.bundlePerMailbox),
-        messages = SendMessageService(authenticator, inbox, subscriptions, limiter, policies.sendPerMailbox, clock),
+        messages = SendMessageService(authenticator, inbox, crossNodeNotifier, limiter, policies.sendPerMailbox, clock),
         receive = ReceiveService(inbox, clock, policies.socketFrames),
         subscriptions = subscriptions,
         certificates = SenderCertificateService(store, certificateIssuer, clock),
@@ -114,9 +116,10 @@ private fun createServices(database: PostgresDatabase): ServerServices {
         trustProxyHeaders = ServerConfig.trustProxyHeaders(),
         purger = InboxPurger(inbox, clock),
         inbox = inbox,
-        metrics = ServerMetrics(),
+        metrics = metrics,
         metricsToken = ServerConfig.metricsToken(),
         databaseReady = database::isReady,
+        crossNodeNotifier = crossNodeNotifier,
     )
 }
 
@@ -130,7 +133,11 @@ fun Application.module(services: ServerServices) {
     install(metricsRecording) {
         metrics = services.metrics
     }
-    monitor.subscribe(ApplicationStopPreparing) { services.subscriptions.shutdown() }
+    services.crossNodeNotifier.start()
+    monitor.subscribe(ApplicationStopPreparing) {
+        services.subscriptions.shutdown()
+        services.crossNodeNotifier.close()
+    }
     install(WebSockets) {
         pingPeriod = PING_PERIOD_SECONDS.seconds
         timeout = IDLE_TIMEOUT_SECONDS.seconds
@@ -159,13 +166,20 @@ fun Application.module(services: ServerServices) {
         keyRoutes(services.keys, ReplaceSignedPreKeysRequestMapper(), UploadOneTimePreKeysRequestMapper())
         preKeyRoutes(services.bundles, PreKeyBundleResponseMapper())
         messageRoutes(services.messages)
-        socketRoutes(services.receive, services.subscriptions, MessageDeliverFrameMapper(), services.metrics)
+        socketRoutes(
+            services.receive,
+            services.subscriptions,
+            services.inbox,
+            services.crossNodeNotifier,
+            MessageDeliverFrameMapper(),
+            services.metrics,
+        )
         senderCertificateRoutes(services.certificates)
         metricsRoutes(services.metrics, services.metricsToken) {
             mapOf(
                 MetricNames.QUEUE_DEPTH to services.inbox.queueDepth().toLong(),
                 MetricNames.ACTIVE_CONNECTIONS to services.subscriptions.activeCount().toLong(),
-            )
+            ) + services.crossNodeNotifier.gauges()
         }
     }
 }

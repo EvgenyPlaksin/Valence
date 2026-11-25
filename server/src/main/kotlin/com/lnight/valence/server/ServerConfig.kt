@@ -1,6 +1,7 @@
 package com.lnight.valence.server
 
 import com.lnight.valence.protocol.Base64Url
+import java.net.URI
 
 object ServerConfig {
     const val CHALLENGE_KEY_VARIABLE = "VALENCE_CHALLENGE_KEY"
@@ -12,6 +13,8 @@ object ServerConfig {
     const val DATABASE_PASSWORD_VARIABLE = "VALENCE_DATABASE_PASSWORD"
     const val DATABASE_MAX_CONNECTIONS_VARIABLE = "VALENCE_DB_MAX_CONNECTIONS"
     const val DATABASE_AUTO_MIGRATE_VARIABLE = "VALENCE_DB_AUTO_MIGRATE"
+    const val REDIS_URL_VARIABLE = "VALENCE_REDIS_URL"
+    const val REDIS_CHANNEL_PREFIX_VARIABLE = "VALENCE_REDIS_CHANNEL_PREFIX"
     const val TRUST_PROXY_HEADERS_VARIABLE = "VALENCE_TRUST_PROXY_HEADERS"
     const val METRICS_TOKEN_VARIABLE = "VALENCE_METRICS_TOKEN"
     private const val MINIMUM_METRICS_TOKEN_LENGTH = 16
@@ -49,6 +52,7 @@ object ServerConfig {
         check(url.startsWith("jdbc:postgresql://") && !url.any(Char::isWhitespace)) {
             "$DATABASE_URL_VARIABLE must be a PostgreSQL JDBC URL"
         }
+
         check(!DATABASE_CREDENTIAL_PARAMETER.containsMatchIn(url)) {
             "$DATABASE_URL_VARIABLE must not contain database credentials"
         }
@@ -76,6 +80,26 @@ object ServerConfig {
             maxConnections = maxConnections,
             autoMigrate = autoMigrate,
         )
+    }
+
+    fun redisConfiguration(environment: Map<String, String> = System.getenv()): RedisConfiguration? {
+        val url = environment[REDIS_URL_VARIABLE]?.takeIf { it.isNotBlank() } ?: return null
+        val uri =
+            runCatching { URI(url) }.getOrElse {
+                error("$REDIS_URL_VARIABLE must be a valid Redis URL")
+            }
+        check(uri.scheme in setOf("redis", "rediss") && !uri.host.isNullOrBlank()) {
+            "$REDIS_URL_VARIABLE must use redis:// or rediss:// and include a host"
+        }
+        check(!url.any(Char::isWhitespace)) { "$REDIS_URL_VARIABLE must not contain whitespace" }
+        val prefix =
+            checkNotNull(environment[REDIS_CHANNEL_PREFIX_VARIABLE]?.takeIf { it.isNotBlank() }) {
+                "$REDIS_CHANNEL_PREFIX_VARIABLE is required when Redis is enabled"
+            }
+        check(prefix.matches(Regex("[A-Za-z0-9:_-]+"))) {
+            "$REDIS_CHANNEL_PREFIX_VARIABLE may contain only letters, numbers, :, _ and -"
+        }
+        return RedisConfiguration(url, "$prefix:notifications")
     }
 
     private fun decode(

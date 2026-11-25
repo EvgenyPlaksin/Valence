@@ -14,6 +14,18 @@ services:
       retries: 10
       start_period: 10s
 
+  redis:
+    image: redis:8.12.0
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      REDIS_CHANNEL_PREFIX: ${VALENCE_REDIS_CHANNEL_PREFIX:-valence:local}
+    command:
+      - sh
+      - -c
+      - |
+        printf 'user default off\nuser valence on >%s &%s:* +publish +subscribe\n' "$$REDIS_PASSWORD" "$$REDIS_CHANNEL_PREFIX" > /tmp/users.acl
+        exec redis-server --aclfile /tmp/users.acl --save "" --appendonly no
+
   server:
     image: valence-server
     build:
@@ -26,9 +38,13 @@ services:
       VALENCE_DATABASE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-valence}
       VALENCE_DATABASE_USER: ${POSTGRES_USER:-valence}
       VALENCE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      VALENCE_REDIS_URL: ${VALENCE_REDIS_URL:-redis://valence:${REDIS_PASSWORD}@redis:6379}
+      VALENCE_REDIS_CHANNEL_PREFIX: ${VALENCE_REDIS_CHANNEL_PREFIX:-valence:local}
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     ports:
       - "${PORT:-8081}:8081"
 

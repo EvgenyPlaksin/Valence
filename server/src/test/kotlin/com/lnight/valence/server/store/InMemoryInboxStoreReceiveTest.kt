@@ -1,6 +1,7 @@
 package com.lnight.valence.server.store
 
 import com.lnight.valence.server.domain.AppendResult
+import com.lnight.valence.server.domain.ConfirmResult
 import com.lnight.valence.server.domain.NewMessage
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -39,7 +40,7 @@ class InMemoryInboxStoreReceiveTest {
         runTest {
             val store = store(5)
 
-            store.deleteUpTo(id, 3)
+            assertEquals(ConfirmResult.CONFIRMED, store.confirm(id, 0, 3))
 
             assertEquals(listOf(4L, 5L), store.sequence())
         }
@@ -49,9 +50,9 @@ class InMemoryInboxStoreReceiveTest {
         runTest {
             val store = store(5)
 
-            store.deleteUpTo(id, 3)
-            store.deleteUpTo(id, 1)
-            store.deleteUpTo(id, 3)
+            assertEquals(ConfirmResult.CONFIRMED, store.confirm(id, 0, 3))
+            assertEquals(ConfirmResult.CONFIRMED, store.confirm(id, 0, 1))
+            assertEquals(ConfirmResult.CONFIRMED, store.confirm(id, 0, 3))
 
             assertEquals(listOf(4L, 5L), store.sequence())
         }
@@ -59,14 +60,14 @@ class InMemoryInboxStoreReceiveTest {
     @Test
     fun `deleting from an unknown mailbox does nothing`() =
         runTest {
-            InMemoryInboxStore().deleteUpTo(id, 10)
+            assertEquals(ConfirmResult.STALE, InMemoryInboxStore().confirm(id, 0, 10))
         }
 
     @Test
     fun `numbers are not reused after deletion`() =
         runTest {
             val store = store(3)
-            store.deleteUpTo(id, 3)
+            store.confirm(id, 0, 3)
 
             val result = store.append(id, NewMessage(ByteArray(1), 1_000L, 100_000L), 1_000)
 

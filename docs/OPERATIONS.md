@@ -6,7 +6,7 @@ This is the runbook for running the server. The design and the reasons behind it
 
 - x86_64 Linux with glibc (Debian or Ubuntu). libsignal ships native libraries for that platform only, so Alpine and ARM64 do not work unless libsignal is built from source.
 - Java 21.
-- Docker Compose v2 for the local PostgreSQL-backed setup.
+- Docker Compose v2 for the local PostgreSQL- and Redis-backed setup.
 - A writable temporary directory. As far as I know libsignal unpacks its native library there at startup. Check this if you run with a read-only root filesystem, and mount a tmpfs on `/tmp`.
 
 ## Configuration
@@ -25,6 +25,9 @@ Everything comes from environment variables. None of the secrets below belong in
 | `VALENCE_DATABASE_PASSWORD` | Yes | PostgreSQL password |
 | `VALENCE_DB_MAX_CONNECTIONS` | No | Hikari connection limit and matching database-dispatcher parallelism, default 10 |
 | `VALENCE_DB_AUTO_MIGRATE` | No | Run Flyway migrations at startup, default `true`; when `false`, startup fails if migrations are pending |
+| `VALENCE_REDIS_URL` | No | Private Redis URL for cross-node Pub/Sub, for example `redis://` or `rediss://`; credentials must be ACL-limited and are never logged |
+| `VALENCE_REDIS_CHANNEL_PREFIX` | With Redis | Environment-specific channel prefix; Redis is disabled if the URL is unset |
+| `REDIS_PASSWORD` | Local Compose | Password for the Compose-only ACL user, used to form `VALENCE_REDIS_URL` |
 | `VALENCE_TRUST_PROXY_HEADERS` | No | `true` only behind exactly one trusted reverse proxy that appends `X-Forwarded-For` |
 | `VALENCE_METRICS_TOKEN` | No | At least 16 characters. Enables `GET /metrics` for requests with this bearer token |
 
@@ -91,7 +94,7 @@ To rotate the server key, repeat steps 2 to 4 with a new key id. No app update i
 
 `generateCertificateKeys` is for development only. It also requires `-PkeyOutputDirectory=<absolute directory outside the repository>`, writes private keys with owner-only permissions, and does not print private key contents. Do not use it to create production keys.
 
-## Local PostgreSQL with Docker Compose
+## Local PostgreSQL and Redis with Docker Compose
 
 Copy `.env.example` to `.env`, replace every placeholder with private values and the server certificate/key from the key ceremony, then start the server and PostgreSQL from the repository root:
 
@@ -105,7 +108,11 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Compose keeps PostgreSQL on its private network and stores its data in the named `postgres-data` volume. The server waits for PostgreSQL's health check and applies Flyway migrations at startup by default. `docker compose down` stops the services without deleting the data volume; `docker compose down --volumes` deletes it.
+Compose keeps PostgreSQL and Redis on their private network; Redis has no published host port and carries no durable application data. PostgreSQL data is stored in the named `postgres-data` volume. The server waits for PostgreSQL's health check and applies Flyway migrations at startup by default, but it does not wait for Redis. If Redis is unavailable, the server starts and uses PostgreSQL polling to deliver messages and detect superseded sockets.
+
+Redis 8.12.0 is selected under its AGPLv3 licensing option. Configure the application with an ACL-limited Redis user that can publish and subscribe only to the Valence environment's channel. Use TLS (`rediss://`) when the Redis connection crosses a trust boundary. Do not expose the Redis port publicly or include Redis credentials in logs or diagnostics. Pub/Sub messages contain mailbox routing/generation hints only, never message envelopes, tokens, or keys.
+
+`docker compose down` stops the services without deleting the PostgreSQL data volume; `docker compose down --volumes` deletes it.
 
 The database volume is not a backup. Create and store PostgreSQL backups separately. For a plain SQL dump:
 
@@ -149,6 +156,27 @@ The container runs as an unprivileged user. Configure the database variables whe
 
 From `server/`, run `.\gradlew.bat integrationTest` on Windows or `./gradlew integrationTest` on Linux/macOS. Testcontainers starts PostgreSQL 17 and requires a working Docker engine. If Testcontainers cannot connect to Docker Desktop, the task can use an already-running local PostgreSQL 17 instance by setting `VALENCE_TEST_DATABASE_URL`, `VALENCE_TEST_DATABASE_USER`, and `VALENCE_TEST_DATABASE_PASSWORD`. The external database name must end in `_test`; the tests truncate the server tables before each test, so never point these variables at a production or shared database.
 
+The integration task also starts Redis 8.12.0 for Pub/Sub tests. Test coverage includes two independent server instances sharing PostgreSQL and Redis, stale confirmation fencing, Redis-unavailable polling, reconnect catch-up, and purge-lock contention.
+
+## Multiple server instances
+
+Run server instances behind a load balancer, with every instance using the same PostgreSQL database and Redis endpoint. Redis notifications reduce delivery latency; they are not required for correctness. If Redis is disconnected, connected sockets recover through the PostgreSQL polling path (30 seconds initially, with jitter). `/ready` reports PostgreSQL readiness and does not remove a server from service solely because Redis is unavailable.
+
+Each socket connection advances the mailbox's PostgreSQL generation. Confirms from an older generation are rejected in the same transaction that would delete inbox rows. Apply the additive socket-state migration before deploying the new server code, and do not enable multi-instance traffic or rely on generation fencing until every active server runs the fencing-capable version. Keep rolling migrations backward-compatible with old and new binaries; Flyway's migration lock serializes migration attempts but does not make incompatible schema changes safe during a rolling deploy.
+
+Budget the database connection pool across the fleet:
+
+```text
+server instance count × VALENCE_DB_MAX_CONNECTIONS + operational headroom
+    <= PostgreSQL max_connections
+```
+
+Each idle resumed socket performs one indexed existence/generation check per polling interval. The interval is jittered from 15 to 45 seconds (30 seconds on average). The approximate poll query rate is `idle resumed sockets / poll interval seconds`; at 100,000 sockets and a 30-second average this is about 3,300 checks per second, or roughly 7–17 concurrently occupied database connections at 2–5 ms per query. The scale test must state whether its socket count is fleet-wide or per-node, measure query latency and database CPU, and keep Hikari waiters at zero for the selected deployment topology. If the pool or database has insufficient headroom, test a 60–120 second interval before adding a more complex batching mechanism. Reconnects also write a new socket generation; clients need jittered reconnect backoff, and the reconnect-storm test must measure generation-write latency and bounded database concurrency. Redis reconnect catch-up is capped at eight concurrent generation checks per server instance.
+
+The bounded Redis publisher queue is FIFO and can contain repeated wake notices for a hot mailbox. These notices carry no message data; overflow is counted and PostgreSQL polling recovers dropped wakes. Add per-mailbox coalescing only if queue metrics show it is needed.
+
+The expiry purge runs on every process but is guarded by `pg_try_advisory_xact_lock`; instances that do not acquire the transaction-level lock skip that run. Rate-limit buckets remain process-local in this release, so effective limits may increase with the instance count. Keep coarse limits at the load balancer or tune per-instance limits until shared rate limiting is designed separately.
+
 ## Behind a reverse proxy
 
 - Terminate TLS at the proxy, and allow WebSocket upgrades on `/v1/socket`.
@@ -168,10 +196,13 @@ Set `VALENCE_METRICS_TOKEN` and scrape `GET /metrics` with `Authorization: Beare
 - `valence_messages_delivered_total`
 - `valence_invalid_frames_total`
 - `valence_messages_purged_total`
+- Redis publish failures and publisher queue overflows
+- Redis subscriber failures, malformed notices, catch-up drops/failures, and connection gauges
+- `valence_redis_publish_queue_depth`
 - `valence_queue_depth` and `valence_active_connections`
 
 The counters are aggregate. No mailbox ID, key, token, or path appears in them.
 
 ## Limits of the current version
 
-- Mailboxes, keys, and queued messages persist in PostgreSQL. Rate limits, sockets, and counters belong to one process, so run one instance until cross-node fan-out is implemented.
+- Mailboxes, keys, messages, and socket generations persist in PostgreSQL. Socket registries, rate limits, and counters are process-local. Redis Pub/Sub provides cross-node wake-ups, with PostgreSQL polling as the recovery path; rate limits are not shared across instances.

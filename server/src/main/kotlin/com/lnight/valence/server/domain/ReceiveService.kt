@@ -7,5 +7,8 @@ class ReceiveService(
     private val clock: Clock,
     private val framePolicy: RateLimitPolicy = RateLimitPolicies().socketFrames,
 ) {
-    fun open(mailboxId: String): ReceiveSession = ReceiveSession(mailboxId, inbox, clock, framePolicy)
+    fun open(
+        mailboxId: String,
+        generation: Long,
+    ): ReceiveSession = ReceiveSession(mailboxId, generation, inbox, clock, framePolicy)
 }
