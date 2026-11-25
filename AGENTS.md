@@ -41,6 +41,7 @@ Rules for working across these areas:
 - Do not add, remove, or upgrade dependencies without asking. Never add a dependency whose licence is incompatible with AGPL-3.0.
 - Do not change public interfaces of a module without asking.
 - Never commit to `main`. Work on the branch provided for the task.
+- Never add an AI agent as a co-author to the user's commits. Do not add a `Co-authored-by` trailer identifying an AI agent.
 - If requirements are ambiguous, ask one focused question before implementing.
 
 ## Code Style
