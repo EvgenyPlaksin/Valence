@@ -4,6 +4,7 @@ import com.lnight.valence.protocol.SignedMessages
 import com.lnight.valence.server.ChallengeTestSupport.ISSUED_AT_MILLIS
 import com.lnight.valence.server.ChallengeTestSupport.LIFETIME_MILLIS
 import com.lnight.valence.server.RegistrationTestSupport.MAILBOX_ID
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.Registration
 import com.lnight.valence.server.domain.RegistrationRejection
@@ -46,6 +47,7 @@ class RegistrationServiceTest {
             assertEquals("token-for-$MAILBOX_ID", registered.token.value)
             assertEquals(listOf(MAILBOX_ID), store.created.map { it.id })
             assertEquals(2, store.createdOneTimeKeys.single().size)
+            assertEquals(listOf(101, 102), store.createdOneTimeKyberKeys.single().map { it.id })
         }
 
     @Test
@@ -153,6 +155,44 @@ class RegistrationServiceTest {
         }
 
     @Test
+    fun `one time kyber ids cannot collide with the last resort key`() =
+        runTest {
+            val verifier = FakePublicKeyVerifier()
+            val colliding = listOf(OneTimeKyberPreKey(1, ByteArray(1569) { 7 }, ByteArray(64) { 8 }))
+
+            assertRejected(
+                RegistrationRejection.MALFORMED,
+                RegistrationTestSupport.registration(oneTimeKyberPreKeys = colliding),
+                RegistrationTestSupport.service(verifier = verifier),
+            )
+            assertTrue(verifier.verifications.isEmpty())
+        }
+
+    @Test
+    fun `registration accepts zero through one hundred one time kyber keys`() =
+        runTest {
+            val empty = RegistrationTestSupport.registration(oneTimeKyberPreKeys = emptyList())
+            val maximum =
+                RegistrationTestSupport.registration(
+                    oneTimeKyberPreKeys =
+                        (101..200).map {
+                            OneTimeKyberPreKey(it, ByteArray(1569) { 7 }, ByteArray(64) { 8 })
+                        },
+                )
+            val oversized =
+                RegistrationTestSupport.registration(
+                    oneTimeKyberPreKeys =
+                        (101..201).map {
+                            OneTimeKyberPreKey(it, ByteArray(1569) { 7 }, ByteArray(64) { 8 })
+                        },
+                )
+
+            assertIs<RegistrationResult.Registered>(RegistrationTestSupport.service().register(empty))
+            assertIs<RegistrationResult.Registered>(RegistrationTestSupport.service().register(maximum))
+            assertRejected(RegistrationRejection.MALFORMED, oversized)
+        }
+
+    @Test
     fun `an invalid proof is rejected and nothing is stored`() =
         runTest {
             val store = RecordingMailboxStore()
@@ -181,6 +221,10 @@ class RegistrationServiceTest {
                         !it.contentEquals(RegistrationTestSupport.kyberPreKeySignature)
                     },
                 )
+            val oneTimeKyberRejected =
+                FakePublicKeyVerifier(
+                    isSignatureValid = { !it.contentEquals(ByteArray(64) { 12 }) },
+                )
 
             assertRejected(
                 RegistrationRejection.INVALID_PREKEY_SIGNATURE,
@@ -191,6 +235,11 @@ class RegistrationServiceTest {
                 RegistrationRejection.INVALID_PREKEY_SIGNATURE,
                 RegistrationTestSupport.registration(),
                 RegistrationTestSupport.service(verifier = kyberRejected),
+            )
+            assertRejected(
+                RegistrationRejection.INVALID_PREKEY_SIGNATURE,
+                RegistrationTestSupport.registration(),
+                RegistrationTestSupport.service(verifier = oneTimeKyberRejected),
             )
         }
 

@@ -7,4 +7,5 @@ import kotlinx.serialization.Serializable
 data class KeyStatusResponse(
     val v: Int = ProtocolVersion.CURRENT,
     val oneTimeRemaining: Int,
+    val oneTimeKyberRemaining: Int = 0,
 )

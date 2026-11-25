@@ -10,3 +10,9 @@ class OneTimePreKey(
     val id: Int,
     val publicKey: ByteArray,
 )
+
+class OneTimeKyberPreKey(
+    val id: Int,
+    val publicKey: ByteArray,
+    val signature: ByteArray,
+)

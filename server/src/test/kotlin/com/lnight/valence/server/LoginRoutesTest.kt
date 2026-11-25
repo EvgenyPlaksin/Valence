@@ -44,7 +44,7 @@ class LoginRoutesTest {
             assertEquals(HttpStatusCode.OK, response.status)
             val body = ProtocolJson.json.decodeFromString(AccessTokenResponse.serializer(), response.bodyAsText())
             assertEquals("token-for-${RegistrationTestSupport.MAILBOX_ID}", body.accessToken)
-            assertEquals(1, body.v)
+            assertEquals(2, body.v)
         }
 
     @Test

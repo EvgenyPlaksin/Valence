@@ -18,5 +18,7 @@ class RegistrationValidator(
     private fun hasValidPreKeys(registration: Registration): Boolean =
         preKeys.isValidSignedPreKey(registration.signedPreKey) &&
             preKeys.isValidKyberPreKey(registration.kyberPreKey) &&
-            preKeys.areValidOneTimePreKeys(registration.oneTimePreKeys)
+            preKeys.areValidOneTimePreKeys(registration.oneTimePreKeys) &&
+            preKeys.areValidOneTimeKyberPreKeys(registration.oneTimeKyberPreKeys, allowEmpty = true) &&
+            registration.oneTimeKyberPreKeys.none { it.id == registration.kyberPreKey.id }
 }

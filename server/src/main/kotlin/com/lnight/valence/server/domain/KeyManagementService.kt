@@ -6,7 +6,7 @@ class KeyManagementService(
 ) {
     private val validator = PreKeyValidator(keyVerifier)
 
-    suspend fun status(mailboxId: String): Int? = store.oneTimePreKeyCount(mailboxId)
+    suspend fun status(mailboxId: String): PreKeyCounts? = store.preKeyCounts(mailboxId)
 
     suspend fun replaceSignedPreKeys(
         mailboxId: String,
@@ -34,6 +34,26 @@ class KeyManagementService(
             KeyUpdateResult.Rejected(KeyUpdateRejection.MALFORMED)
         }
 
+    suspend fun uploadOneTimeKyberPreKeys(
+        mailboxId: String,
+        keys: List<OneTimeKyberPreKey>,
+    ): KeyUpdateResult {
+        val validKeys = validator.areValidOneTimeKyberPreKeys(keys)
+        val mailbox = if (validKeys) store.find(mailboxId) else null
+        val rejection =
+            when {
+                !validKeys -> KeyUpdateRejection.MALFORMED
+                mailbox == null -> KeyUpdateRejection.UNKNOWN_MAILBOX
+                keys.any { !isSignedBy(mailbox.identityKey, it) } -> KeyUpdateRejection.INVALID_SIGNATURE
+                else -> null
+            }
+        return rejection?.let { KeyUpdateResult.Rejected(it) }
+            ?: resultOf(
+                mailboxId,
+                store.addOneTimeKyberPreKeys(mailboxId, keys, MAX_STORED_ONE_TIME_KYBER_KEYS),
+            )
+    }
+
     private fun replacementRejection(
         mailbox: Mailbox,
         replacement: PreKeyReplacement,
@@ -53,18 +73,37 @@ class KeyManagementService(
         key: SignedPublicKey,
     ): Boolean = keyVerifier.verifySignature(identityKey, key.publicKey, key.signature)
 
+    private fun isSignedBy(
+        identityKey: ByteArray,
+        key: OneTimeKyberPreKey,
+    ): Boolean = keyVerifier.verifySignature(identityKey, key.publicKey, key.signature)
+
     private suspend fun resultOf(
         mailboxId: String,
         outcome: KeyStoreOutcome,
     ): KeyUpdateResult =
         when (outcome) {
-            KeyStoreOutcome.UPDATED -> KeyUpdateResult.Updated(store.oneTimePreKeyCount(mailboxId) ?: 0)
-            KeyStoreOutcome.ID_EXISTS -> KeyUpdateResult.Rejected(KeyUpdateRejection.ID_EXISTS)
-            KeyStoreOutcome.LIMIT_EXCEEDED -> KeyUpdateResult.Rejected(KeyUpdateRejection.MALFORMED)
-            KeyStoreOutcome.UNKNOWN_MAILBOX -> KeyUpdateResult.Rejected(KeyUpdateRejection.UNKNOWN_MAILBOX)
+            KeyStoreOutcome.UPDATED -> {
+                store.preKeyCounts(mailboxId)?.let {
+                    KeyUpdateResult.Updated(it.oneTimeRemaining, it.oneTimeKyberRemaining)
+                } ?: KeyUpdateResult.Rejected(KeyUpdateRejection.UNKNOWN_MAILBOX)
+            }
+
+            KeyStoreOutcome.ID_EXISTS -> {
+                KeyUpdateResult.Rejected(KeyUpdateRejection.ID_EXISTS)
+            }
+
+            KeyStoreOutcome.LIMIT_EXCEEDED -> {
+                KeyUpdateResult.Rejected(KeyUpdateRejection.MALFORMED)
+            }
+
+            KeyStoreOutcome.UNKNOWN_MAILBOX -> {
+                KeyUpdateResult.Rejected(KeyUpdateRejection.UNKNOWN_MAILBOX)
+            }
         }
 
     private companion object {
         const val MAX_STORED_ONE_TIME_KEYS = 200
+        const val MAX_STORED_ONE_TIME_KYBER_KEYS = 200
     }
 }

@@ -5,4 +5,5 @@ class PreKeyBundle(
     val signedPreKey: SignedPublicKey,
     val kyberPreKey: SignedPublicKey,
     val oneTimePreKey: OneTimePreKey?,
+    val oneTimeKyberPreKey: OneTimeKyberPreKey?,
 )

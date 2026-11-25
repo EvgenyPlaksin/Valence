@@ -17,7 +17,7 @@ class ProtocolJsonTest {
         val json = ProtocolJson.json.parseToJsonElement(text).jsonObject
 
         assertEquals("message.deliver", json.getValue("type").jsonPrimitive.content)
-        assertEquals("1", json.getValue("v").jsonPrimitive.content)
+        assertEquals("2", json.getValue("v").jsonPrimitive.content)
     }
 
     @Test
@@ -25,7 +25,7 @@ class ProtocolJsonTest {
         val frame =
             ProtocolJson.decodeClientFrame("""{"type":"sync.resume","v":1,"afterServerSeq":5,"extra":true}""")
 
-        assertEquals(SyncResumeFrame(afterServerSeq = 5), frame)
+        assertEquals(SyncResumeFrame(v = 1, afterServerSeq = 5), frame)
     }
 
     @Test

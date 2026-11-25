@@ -27,7 +27,8 @@ import java.time.ZoneOffset
 internal fun InMemoryMailboxStore.seed(
     mailbox: com.lnight.valence.server.domain.Mailbox,
     keys: List<com.lnight.valence.server.domain.OneTimePreKey> = emptyList(),
-): InMemoryMailboxStore = apply { runBlocking { create(mailbox, keys) } }
+    kyberKeys: List<com.lnight.valence.server.domain.OneTimeKyberPreKey> = emptyList(),
+): InMemoryMailboxStore = apply { runBlocking { create(mailbox, keys, kyberKeys) } }
 
 internal object FakeAccessTokens {
     private const val PREFIX = "token-for-"

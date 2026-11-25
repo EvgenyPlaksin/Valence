@@ -3,8 +3,10 @@ package com.lnight.valence.server.store
 import com.lnight.valence.server.domain.KeyStoreOutcome
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.MailboxStore
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PreKeyBundle
+import com.lnight.valence.server.domain.PreKeyCounts
 import com.lnight.valence.server.domain.SignedPublicKey
 import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.CoroutineDispatcher
@@ -13,7 +15,7 @@ import java.sql.ResultSet
 import java.sql.Timestamp
 import java.time.Instant
 
-@Suppress("MagicNumber")
+@Suppress("MagicNumber", "TooManyFunctions")
 class PostgresMailboxStore(
     private val dataSource: HikariDataSource,
     private val dispatcher: CoroutineDispatcher,
@@ -21,6 +23,7 @@ class PostgresMailboxStore(
     override suspend fun create(
         mailbox: Mailbox,
         oneTimePreKeys: List<OneTimePreKey>,
+        oneTimeKyberPreKeys: List<OneTimeKyberPreKey>,
     ): Boolean =
         dataSource.inTransaction(dispatcher) { connection ->
             val inserted =
@@ -54,6 +57,7 @@ class PostgresMailboxStore(
                         check(statement.executeUpdate() == 1) { "Socket state was not created for the mailbox" }
                     }
                 insertPreKeys(connection, mailbox.id, oneTimePreKeys)
+                insertKyberPreKeys(connection, mailbox.id, oneTimeKyberPreKeys)
             }
             inserted
         }
@@ -79,6 +83,42 @@ class PostgresMailboxStore(
             }
         }
 
+    override suspend fun oneTimeKyberPreKeyCount(mailboxId: String): Int? =
+        dataSource.withConnection(dispatcher) { connection ->
+            connection
+                .prepareStatement("SELECT count(*) FROM one_time_kyber_prekey WHERE mailbox_id = ?")
+                .use { statement ->
+                    statement.setString(1, mailboxId)
+                    statement.executeQuery().use { result ->
+                        result.next()
+                        result.getLong(1).takeIf { mailboxExists(connection, mailboxId) }?.toInt()
+                    }
+                }
+        }
+
+    override suspend fun preKeyCounts(mailboxId: String): PreKeyCounts? =
+        dataSource.withConnection(dispatcher) { connection ->
+            connection
+                .prepareStatement(
+                    """
+                    SELECT
+                        (SELECT count(*) FROM one_time_prekey WHERE mailbox_id = mailbox.mailbox_id) AS ec_count,
+                        (SELECT count(*) FROM one_time_kyber_prekey WHERE mailbox_id = mailbox.mailbox_id) AS kyber_count
+                    FROM mailbox
+                    WHERE mailbox_id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, mailboxId)
+                    statement.executeQuery().use { result ->
+                        if (result.next()) {
+                            PreKeyCounts(result.getInt("ec_count"), result.getInt("kyber_count"))
+                        } else {
+                            null
+                        }
+                    }
+                }
+        }
+
     override suspend fun replaceSignedPreKeys(
         mailboxId: String,
         signedPreKey: SignedPublicKey,
@@ -95,7 +135,16 @@ class PostgresMailboxStore(
                             if (result.next()) result.getInt(1) to result.getInt(2) else null
                         }
                     } ?: return@inTransaction KeyStoreOutcome.UNKNOWN_MAILBOX
-            if (existing.first == signedPreKey.id || existing.second == kyberPreKey.id) {
+            val oneTimeKyberIdExists =
+                connection
+                    .prepareStatement(
+                        "SELECT 1 FROM one_time_kyber_prekey WHERE mailbox_id = ? AND prekey_id = ?",
+                    ).use { statement ->
+                        statement.setString(1, mailboxId)
+                        statement.setInt(2, kyberPreKey.id)
+                        statement.executeQuery().use(ResultSet::next)
+                    }
+            if (existing.first == signedPreKey.id || existing.second == kyberPreKey.id || oneTimeKyberIdExists) {
                 return@inTransaction KeyStoreOutcome.ID_EXISTS
             }
             connection
@@ -116,6 +165,49 @@ class PostgresMailboxStore(
                     statement.setString(7, mailboxId)
                     check(statement.executeUpdate() == 1) { "Locked mailbox disappeared during key replacement" }
                 }
+            KeyStoreOutcome.UPDATED
+        }
+
+    override suspend fun addOneTimeKyberPreKeys(
+        mailboxId: String,
+        keys: List<OneTimeKyberPreKey>,
+        maxStored: Int,
+    ): KeyStoreOutcome =
+        dataSource.inTransaction(dispatcher) { connection ->
+            val lastResortId =
+                connection
+                    .prepareStatement("SELECT kyber_prekey_id FROM mailbox WHERE mailbox_id = ? FOR UPDATE")
+                    .use { statement ->
+                        statement.setString(1, mailboxId)
+                        statement.executeQuery().use { result -> if (result.next()) result.getInt(1) else null }
+                    } ?: return@inTransaction KeyStoreOutcome.UNKNOWN_MAILBOX
+            if (keys.map { it.id }.toSet().size != keys.size || keys.any { it.id == lastResortId }) {
+                return@inTransaction KeyStoreOutcome.ID_EXISTS
+            }
+            val currentCount =
+                connection
+                    .prepareStatement("SELECT count(*) FROM one_time_kyber_prekey WHERE mailbox_id = ?")
+                    .use { statement ->
+                        statement.setString(1, mailboxId)
+                        statement.executeQuery().use { result ->
+                            result.next()
+                            result.getInt(1)
+                        }
+                    }
+            if (currentCount + keys.size > maxStored) return@inTransaction KeyStoreOutcome.LIMIT_EXCEEDED
+            val existingId =
+                connection
+                    .prepareStatement(
+                        "SELECT 1 FROM one_time_kyber_prekey WHERE mailbox_id = ? AND prekey_id = ?",
+                    ).use { statement ->
+                        keys.any { key ->
+                            statement.setString(1, mailboxId)
+                            statement.setInt(2, key.id)
+                            statement.executeQuery().use(ResultSet::next)
+                        }
+                    }
+            if (existingId) return@inTransaction KeyStoreOutcome.ID_EXISTS
+            insertKyberPreKeys(connection, mailboxId, keys)
             KeyStoreOutcome.UPDATED
         }
 
@@ -169,32 +261,79 @@ class PostgresMailboxStore(
                     }
                 } ?: return@inTransaction null
             val oneTimePreKey =
-                connection
-                    .prepareStatement(
-                        """
-                        DELETE FROM one_time_prekey
-                        WHERE (mailbox_id, prekey_sequence) IN (
-                            SELECT mailbox_id, prekey_sequence
-                            FROM one_time_prekey
-                            WHERE mailbox_id = ?
-                            ORDER BY prekey_sequence ASC
-                            LIMIT 1
-                            FOR UPDATE SKIP LOCKED
-                        )
-                        RETURNING prekey_id, public_key
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setString(1, mailboxId)
-                        statement.executeQuery().use { result ->
-                            if (result.next()) {
-                                OneTimePreKey(result.getInt("prekey_id"), result.getBytes("public_key"))
-                            } else {
-                                null
-                            }
-                        }
-                    }
-            PreKeyBundle(mailbox.identityKey, mailbox.signedPreKey, mailbox.kyberPreKey, oneTimePreKey)
+                takeOneTimePreKey(connection, mailboxId)
+            val oneTimeKyberPreKey =
+                takeOneTimeKyberPreKey(connection, mailboxId)
+            PreKeyBundle(
+                mailbox.identityKey,
+                mailbox.signedPreKey,
+                mailbox.kyberPreKey,
+                oneTimePreKey,
+                oneTimeKyberPreKey,
+            )
         }
+
+    private fun takeOneTimePreKey(
+        connection: Connection,
+        mailboxId: String,
+    ): OneTimePreKey? =
+        connection
+            .prepareStatement(
+                """
+                DELETE FROM one_time_prekey
+                WHERE (mailbox_id, prekey_sequence) IN (
+                    SELECT mailbox_id, prekey_sequence
+                    FROM one_time_prekey
+                    WHERE mailbox_id = ?
+                    ORDER BY prekey_sequence ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING prekey_id, public_key
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, mailboxId)
+                statement.executeQuery().use { result ->
+                    if (result.next()) {
+                        OneTimePreKey(result.getInt("prekey_id"), result.getBytes("public_key"))
+                    } else {
+                        null
+                    }
+                }
+            }
+
+    private fun takeOneTimeKyberPreKey(
+        connection: Connection,
+        mailboxId: String,
+    ): OneTimeKyberPreKey? =
+        connection
+            .prepareStatement(
+                """
+                DELETE FROM one_time_kyber_prekey
+                WHERE (mailbox_id, prekey_sequence) IN (
+                    SELECT mailbox_id, prekey_sequence
+                    FROM one_time_kyber_prekey
+                    WHERE mailbox_id = ?
+                    ORDER BY prekey_sequence ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING prekey_id, public_key, signature
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, mailboxId)
+                statement.executeQuery().use { result ->
+                    if (result.next()) {
+                        OneTimeKyberPreKey(
+                            result.getInt("prekey_id"),
+                            result.getBytes("public_key"),
+                            result.getBytes("signature"),
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }
 
     private fun insertPreKeys(
         connection: Connection,
@@ -210,6 +349,27 @@ class PostgresMailboxStore(
                     statement.setString(1, mailboxId)
                     statement.setInt(2, key.id)
                     statement.setBytes(3, key.publicKey)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
+            }
+    }
+
+    private fun insertKyberPreKeys(
+        connection: Connection,
+        mailboxId: String,
+        keys: List<OneTimeKyberPreKey>,
+    ) {
+        if (keys.isEmpty()) return
+        connection
+            .prepareStatement(
+                "INSERT INTO one_time_kyber_prekey (mailbox_id, prekey_id, public_key, signature) VALUES (?, ?, ?, ?)",
+            ).use { statement ->
+                keys.forEach { key ->
+                    statement.setString(1, mailboxId)
+                    statement.setInt(2, key.id)
+                    statement.setBytes(3, key.publicKey)
+                    statement.setBytes(4, key.signature)
                     statement.addBatch()
                 }
                 statement.executeBatch()

@@ -30,6 +30,7 @@ import com.lnight.valence.server.routes.RegisterRequestMapper
 import com.lnight.valence.server.routes.ReplaceSignedPreKeysRequestMapper
 import com.lnight.valence.server.routes.SERVER_DRAINING
 import com.lnight.valence.server.routes.ServerMetrics
+import com.lnight.valence.server.routes.UploadOneTimeKyberPreKeysRequestMapper
 import com.lnight.valence.server.routes.UploadOneTimePreKeysRequestMapper
 import com.lnight.valence.server.routes.accessToken
 import com.lnight.valence.server.routes.authRoutes
@@ -209,7 +210,12 @@ private fun Application.installServerRoutes(
         authRoutes(services.challenges)
         registrationRoutes(services.registration, RegisterRequestMapper())
         loginRoutes(services.login, AuthTokenRequestMapper())
-        keyRoutes(services.keys, ReplaceSignedPreKeysRequestMapper(), UploadOneTimePreKeysRequestMapper())
+        keyRoutes(
+            services.keys,
+            ReplaceSignedPreKeysRequestMapper(),
+            UploadOneTimePreKeysRequestMapper(),
+            UploadOneTimeKyberPreKeysRequestMapper(),
+        )
         preKeyRoutes(services.bundles, PreKeyBundleResponseMapper())
         messageRoutes(services.messages)
         socketRoutes(

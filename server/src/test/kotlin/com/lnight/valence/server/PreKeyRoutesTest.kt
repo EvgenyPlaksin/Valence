@@ -4,6 +4,7 @@ import com.lnight.valence.protocol.Base64Url
 import com.lnight.valence.protocol.ProtocolHeaders
 import com.lnight.valence.protocol.ProtocolJson
 import com.lnight.valence.protocol.http.PreKeyBundleResponse
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.store.InMemoryMailboxStore
 import io.ktor.client.HttpClient
@@ -26,9 +27,16 @@ class PreKeyRoutesTest {
     private val id = RegistrationTestSupport.MAILBOX_ID
     private val deliveryKey = Base64Url.encode(DeliveryKeyTestSupport.deliveryKey)
 
-    private fun ApplicationTestBuilder.start(oneTimeCount: Int = 2): InMemoryMailboxStore {
+    private fun ApplicationTestBuilder.start(
+        oneTimeCount: Int = 2,
+        oneTimeKyberCount: Int = 2,
+    ): InMemoryMailboxStore {
         val keys = (1..oneTimeCount).map { OneTimePreKey(it, ByteArray(33) { 7 }) }
-        val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox(), keys)
+        val kyberKeys =
+            (101 until 101 + oneTimeKyberCount).map {
+                OneTimeKyberPreKey(it, ByteArray(1569) { 8 }, ByteArray(64) { 9 })
+            }
+        val store = InMemoryMailboxStore().seed(DeliveryKeyTestSupport.mailbox(), keys, kyberKeys)
         application { module(TestServices.create(store = store)) }
         return store
     }
@@ -55,10 +63,10 @@ class PreKeyRoutesTest {
 
             assertEquals(HttpStatusCode.OK, response.status)
             val bundle = response.bundle()
-            assertEquals(1, bundle.v)
+            assertEquals(2, bundle.v)
             assertContentEquals(ByteArray(33) { 4 }, Base64Url.decode(bundle.identityKey))
             assertEquals(1, bundle.signedPreKey.id)
-            assertEquals(1, bundle.kyberPreKey.id)
+            assertEquals(101, bundle.kyberPreKey.id)
             assertEquals(1, bundle.oneTimePreKey?.id)
         }
 
@@ -66,23 +74,13 @@ class PreKeyRoutesTest {
     fun `fetches consume one time keys and an exhausted bundle omits the field`() =
         testApplication {
             val store = start()
+            val first = client.fetch().bundle()
+            val second = client.fetch().bundle()
 
-            assertEquals(
-                1,
-                client
-                    .fetch()
-                    .bundle()
-                    .oneTimePreKey
-                    ?.id,
-            )
-            assertEquals(
-                2,
-                client
-                    .fetch()
-                    .bundle()
-                    .oneTimePreKey
-                    ?.id,
-            )
+            assertEquals(1, first.oneTimePreKey?.id)
+            assertEquals(101, first.kyberPreKey.id)
+            assertEquals(2, second.oneTimePreKey?.id)
+            assertEquals(102, second.kyberPreKey.id)
             val exhausted = client.fetch()
 
             assertEquals(HttpStatusCode.OK, exhausted.status)
@@ -93,6 +91,8 @@ class PreKeyRoutesTest {
                     .containsKey("oneTimePreKey"),
             )
             assertNull(exhausted.bundle().oneTimePreKey)
+            assertEquals(1, exhausted.bundle().kyberPreKey.id)
+            assertEquals(0, store.oneTimeKyberPreKeyCount(id))
             assertEquals(0, store.oneTimePreKeyCount(id))
         }
 
@@ -105,6 +105,26 @@ class PreKeyRoutesTest {
 
             assertEquals(HttpStatusCode.Unauthorized, response.status)
             assertEquals(2, store.oneTimePreKeyCount(id))
+            assertEquals(2, store.oneTimeKyberPreKeyCount(id))
+        }
+
+    @Test
+    fun `kyber exhaustion preserves available ec one time keys`() =
+        testApplication {
+            start(oneTimeCount = 1, oneTimeKyberCount = 0)
+            val kyberExhausted = client.fetch().bundle()
+            assertEquals(1, kyberExhausted.oneTimePreKey?.id)
+            assertEquals(1, kyberExhausted.kyberPreKey.id)
+        }
+
+    @Test
+    fun `ec exhaustion preserves available kyber one time keys`() =
+        testApplication {
+            val store = start(oneTimeCount = 0, oneTimeKyberCount = 1)
+            val ecExhausted = client.fetch().bundle()
+            assertNull(ecExhausted.oneTimePreKey)
+            assertEquals(101, ecExhausted.kyberPreKey.id)
+            assertEquals(0, store.oneTimeKyberPreKeyCount(id))
         }
 
     @Test

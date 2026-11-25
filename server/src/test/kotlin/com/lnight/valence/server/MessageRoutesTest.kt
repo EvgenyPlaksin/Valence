@@ -106,7 +106,7 @@ class MessageRoutesTest {
     fun `unusable bodies answer 400`() =
         testApplication {
             start()
-            val unsupported = request().replace("\"v\":1", "\"v\":99")
+            val unsupported = request().replace("\"v\":2", "\"v\":99")
 
             assertEquals(HttpStatusCode.BadRequest, client.send("not json").status)
             assertEquals(HttpStatusCode.BadRequest, client.send(unsupported).status)

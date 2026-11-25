@@ -19,7 +19,7 @@ class HealthResponseTest {
         assertNotNull(fixtureStream)
         val fixtureContent = fixtureStream.bufferedReader().use { it.readText() }
 
-        val response = HealthResponse(version = 1, status = "ok")
+        val response = HealthResponse(version = 2, status = "ok")
         val serialized = json.encodeToString(response)
 
         val expected = json.encodeToString(json.decodeFromString<HealthResponse>(fixtureContent))

@@ -165,6 +165,8 @@ Run server instances behind a load balancer, with every instance using the same 
 
 Each socket connection advances the mailbox's PostgreSQL generation. Confirms from an older generation are rejected in the same transaction that would delete inbox rows. Apply the additive socket-state migration before deploying the new server code, and do not enable multi-instance traffic or rely on generation fencing until every active server runs the fencing-capable version. Keep rolling migrations backward-compatible with old and new binaries; Flyway's migration lock serializes migration attempts but does not make incompatible schema changes safe during a rolling deploy.
 
+For one-time Kyber prekeys, apply V3 and deploy the Kyber-capable server to every node before enabling client uploads. The migration is additive and older binaries can run against the new schema, but they ignore `oneTimeKyberPreKeys` during registration and do not implement `POST /v1/keys/kyber-one-time`. Keep the client feature disabled until all server nodes support the endpoint; disable client uploads before rolling back to older server binaries.
+
 Budget the database connection pool across the fleet:
 
 ```text

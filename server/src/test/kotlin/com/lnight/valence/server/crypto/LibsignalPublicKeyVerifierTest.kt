@@ -67,6 +67,17 @@ class LibsignalPublicKeyVerifierTest {
     }
 
     @Test
+    fun `a one time kyber signature verifies over the exact serialized key bytes`() {
+        val oneTimeKyberPreKey = KEMKeyPair.generate(KEMKeyType.KYBER_1024).publicKey.serialize()
+        val signature = identity.privateKey.calculateSignature(oneTimeKyberPreKey)
+        val modifiedKey = oneTimeKyberPreKey.copyOf().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
+
+        assertTrue(verifier.isValidKemKey(oneTimeKyberPreKey))
+        assertTrue(verifier.verifySignature(identityPublic, oneTimeKyberPreKey, signature))
+        assertFalse(verifier.verifySignature(identityPublic, modifiedKey, signature))
+    }
+
+    @Test
     fun `generated keys are recognised and mixed up keys are rejected`() {
         val kyber = KEMKeyPair.generate(KEMKeyType.KYBER_1024).publicKey.serialize()
 

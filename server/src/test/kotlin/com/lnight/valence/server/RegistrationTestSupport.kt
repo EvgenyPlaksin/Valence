@@ -10,6 +10,7 @@ import com.lnight.valence.server.domain.AccessToken
 import com.lnight.valence.server.domain.AccessTokenIssuer
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.MailboxStore
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PublicKeyVerifier
 import com.lnight.valence.server.domain.Registration
@@ -33,6 +34,7 @@ internal object RegistrationTestSupport {
         signedPreKey: SignedPublicKey = SignedPublicKey(1, ByteArray(33) { 5 }, signedPreKeySignature),
         kyberPreKey: SignedPublicKey = SignedPublicKey(1, ByteArray(1569) { 6 }, kyberPreKeySignature),
         oneTimePreKeys: List<OneTimePreKey> = defaultOneTimePreKeys(),
+        oneTimeKyberPreKeys: List<OneTimeKyberPreKey> = defaultOneTimeKyberPreKeys(),
         deliveryKeyHash: ByteArray = ByteArray(32) { 9 },
         proof: ByteArray = validProof,
     ): Registration =
@@ -43,12 +45,19 @@ internal object RegistrationTestSupport {
             signedPreKey = signedPreKey,
             kyberPreKey = kyberPreKey,
             oneTimePreKeys = oneTimePreKeys,
+            oneTimeKyberPreKeys = oneTimeKyberPreKeys,
             deliveryKeyHash = deliveryKeyHash,
             proof = proof,
         )
 
     fun defaultOneTimePreKeys(): List<OneTimePreKey> =
         listOf(OneTimePreKey(1, ByteArray(33) { 7 }), OneTimePreKey(2, ByteArray(33) { 8 }))
+
+    fun defaultOneTimeKyberPreKeys(): List<OneTimeKyberPreKey> =
+        listOf(
+            OneTimeKyberPreKey(101, ByteArray(1569) { 9 }, ByteArray(64) { 10 }),
+            OneTimeKyberPreKey(102, ByteArray(1569) { 11 }, ByteArray(64) { 12 }),
+        )
 
     fun registerRequest(): RegisterRequest =
         RegisterRequest(
@@ -63,6 +72,19 @@ internal object RegistrationTestSupport {
                 listOf(
                     OneTimePreKeyDto(1, Base64Url.encode(ByteArray(33) { 7 })),
                     OneTimePreKeyDto(2, Base64Url.encode(ByteArray(33) { 8 })),
+                ),
+            oneTimeKyberPreKeys =
+                listOf(
+                    KyberPreKeyDto(
+                        101,
+                        Base64Url.encode(ByteArray(1569) { 9 }),
+                        Base64Url.encode(ByteArray(64) { 10 }),
+                    ),
+                    KyberPreKeyDto(
+                        102,
+                        Base64Url.encode(ByteArray(1569) { 11 }),
+                        Base64Url.encode(ByteArray(64) { 12 }),
+                    ),
                 ),
             deliveryKeyHash = Base64Url.encode(ByteArray(32) { 9 }),
             proof = Base64Url.encode(validProof),

@@ -30,6 +30,7 @@ class HttpContractTest {
         val bundle = ContractAssertions.roundTrip("prekey-bundle", PreKeyBundleResponse.serializer())
 
         assertEquals(48, assertNotNull(bundle.oneTimePreKey).id)
+        assertEquals(31, bundle.kyberPreKey.id)
     }
 
     @Test
