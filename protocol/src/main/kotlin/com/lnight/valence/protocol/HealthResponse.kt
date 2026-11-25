@@ -6,6 +6,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class HealthResponse(
     @SerialName("v")
-    val version: Int = 1,
+    val version: Int = ProtocolVersion.CURRENT,
     val status: String = "ok",
 )

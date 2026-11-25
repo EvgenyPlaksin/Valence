@@ -2,6 +2,7 @@ package com.lnight.valence.server.store
 
 import com.lnight.valence.server.RegistrationTestSupport
 import com.lnight.valence.server.domain.KeyStoreOutcome
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.SignedPublicKey
 import kotlinx.coroutines.Dispatchers
@@ -17,9 +18,16 @@ class InMemoryMailboxStoreKeysTest {
 
     private fun keys(ids: IntRange) = ids.map { OneTimePreKey(it, ByteArray(33) { 7 }) }
 
+    private fun kyberKeys(ids: IntRange) =
+        ids.map { OneTimeKyberPreKey(it, ByteArray(1569) { 8 }, ByteArray(64) { 9 }) }
+
     private suspend fun store(oneTimeCount: Int = 2) =
         InMemoryMailboxStore().also {
-            it.create(RegistrationTestSupport.mailbox(), keys(1..oneTimeCount))
+            it.create(
+                RegistrationTestSupport.mailbox(),
+                keys(1..oneTimeCount),
+                RegistrationTestSupport.defaultOneTimeKyberPreKeys(),
+            )
         }
 
     private fun signed(id: Int) = SignedPublicKey(id, ByteArray(33) { 5 }, ByteArray(64) { 2 })
@@ -30,6 +38,7 @@ class InMemoryMailboxStoreKeysTest {
     fun `the count reflects the stored one time keys`() =
         runTest {
             assertEquals(2, store().oneTimePreKeyCount(id))
+            assertEquals(2, store().oneTimeKyberPreKeyCount(id))
             assertNull(store().oneTimePreKeyCount("mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa"))
         }
 
@@ -75,6 +84,26 @@ class InMemoryMailboxStoreKeysTest {
 
             assertEquals(KeyStoreOutcome.UPDATED, store.addOneTimePreKeys(id, keys(101..102), 200))
             assertEquals(4, store.oneTimePreKeyCount(id))
+        }
+
+    @Test
+    fun `adding one time kyber keys increases its independent count`() =
+        runTest {
+            val store = store()
+
+            assertEquals(KeyStoreOutcome.UPDATED, store.addOneTimeKyberPreKeys(id, kyberKeys(103..104), 200))
+            assertEquals(4, store.oneTimeKyberPreKeyCount(id))
+            assertEquals(2, store.oneTimePreKeyCount(id))
+        }
+
+    @Test
+    fun `one time kyber additions and last resort replacements reject colliding ids`() =
+        runTest {
+            val store = store()
+
+            assertEquals(KeyStoreOutcome.ID_EXISTS, store.addOneTimeKyberPreKeys(id, kyberKeys(1..1), 200))
+            assertEquals(KeyStoreOutcome.ID_EXISTS, store.addOneTimeKyberPreKeys(id, kyberKeys(101..101), 200))
+            assertEquals(KeyStoreOutcome.ID_EXISTS, store.replaceSignedPreKeys(id, signed(2), kyber(101)))
         }
 
     @Test

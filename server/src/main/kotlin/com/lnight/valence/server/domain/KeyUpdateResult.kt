@@ -3,6 +3,7 @@ package com.lnight.valence.server.domain
 sealed interface KeyUpdateResult {
     data class Updated(
         val oneTimeRemaining: Int,
+        val oneTimeKyberRemaining: Int = 0,
     ) : KeyUpdateResult
 
     data class Rejected(

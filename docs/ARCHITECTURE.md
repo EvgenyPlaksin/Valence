@@ -50,8 +50,9 @@ Each device holds:
 |---|---|---|---|
 | Identity key pair (IK) | libsignal identity key pair; signs prekeys | Permanent per install | Public part |
 | Signed prekey (SPK) | EC prekey, signed by IK | Rotated every 7 days | Public part and signature |
-| Kyber prekey (KPK) | Kyber KEM prekey, signed by IK. One last-resort prekey in v1 | Rotated with the SPK | Public part and signature |
+| Kyber prekey (KPK) | Kyber KEM prekey, signed by IK. One last-resort prekey | Rotated with the SPK | Public part and signature |
 | One-time prekeys (OPK) | EC prekeys | Single use, batch of 100, replenished at threshold 25 | Public parts |
+| One-time Kyber prekeys | Kyber KEM prekeys, each signed by IK | Single use, batches up to 100, maximum 200 queued | Public parts and signatures |
 | Delivery key (DK) | Random 128-bit value | Permanent until rotated | SHA-256 hash only; the key itself is shared with contacts |
 | Session state | Ratchet, chain, and message keys, held inside libsignal session records | Per contact | Never |
 
@@ -63,14 +64,14 @@ The **mailbox ID** is the only server-visible address. It is a random 128-bit va
 
 ```
 Client                                                     Ktor Server
-  | generate IK, SPK, KPK, OPK[100], DK                         |
-  | sign SPK and KPK with IK                                    |
+  | generate IK, SPK, KPK, OPK[100], Kyber OPK[0..100], DK      |
+  | sign SPK, KPK, and every Kyber OPK with IK                  |
   |-- POST /v1/auth/challenge ---------------------------------->|
   |<-- 200 { challenge, expiresAt } -----------------------------|
   | sign the registration message with IK -> proof               |
   |-- POST /v1/register ---------------------------------------->|
   |   { challenge, mailboxId, identityKey, signedPreKey,         |
-  |     kyberPreKey, oneTimePreKeys, deliveryKeyHash, proof }    |
+  |     kyberPreKey, oneTimePreKeys, oneTimeKyberPreKeys, ... }  |
   |                                                              | verify challenge MAC and expiry
   |                                                              | verify proof under IK
   |                                                              | verify prekey signatures under IK
@@ -98,8 +99,8 @@ The byte layout is defined once, in `protocol/`, and covered by golden vectors.
 2. The challenge MAC is valid and the challenge has not expired, otherwise `401`.
 3. Ids, counts, and key sizes are valid, and every public key parses, otherwise `400`. Structural checks come before signature verification because a malformed key would otherwise surface as an invalid signature, and because they are cheaper.
 4. `proof` verifies under the uploaded identity key over the message the server rebuilds from the received fields, otherwise `401`.
-5. Both prekey signatures verify under the same identity key, otherwise `401`.
-6. One transaction inserts the mailbox, the identity key, the delivery key hash, and the one-time prekeys. A mailbox ID that already exists returns `409`.
+5. The signed EC and last-resort Kyber signatures, and every one-time Kyber signature, verify under the same identity key, otherwise `401`.
+6. One transaction inserts the mailbox, the identity key, the delivery key hash, and both kinds of one-time prekeys. A mailbox ID that already exists returns `409`.
 
 **Login.** A client that already has an account obtains an access token with the same challenge endpoint and `POST /v1/auth/token`. The server checks in this order:
 
@@ -117,10 +118,10 @@ The identity key always comes from the server's own record, never from the reque
 
 Alice initiates to Bob.
 
-1. Alice calls `GET /v1/prekeys/{bobMailboxId}`, presenting Bob's delivery key in the `X-Delivery-Key` header and no JWT. The server returns `IK_B`, `SPK_B` with its signature, `KPK_B` with its signature, and atomically **consumes** one `OPK_B` (or none if exhausted).
-2. Alice hands the bundle to libsignal's session builder. It verifies both signatures under `IK_B`, performs the PQXDH key agreement, and initialises the Double Ratchet. Any verification failure aborts the send.
+1. Alice calls `GET /v1/prekeys/{bobMailboxId}`, presenting Bob's delivery key in the `X-Delivery-Key` header and no JWT. The server returns `IK_B`, `SPK_B` with its signature, one signed Kyber prekey, and atomically **consumes** one EC OPK and one Kyber OPK when available. The Kyber field contains the oldest one-time Kyber prekey, or the signed last-resort key when the one-time Kyber queue is empty.
+2. Alice hands the bundle to libsignal's session builder. It verifies the signed EC prekey and the selected Kyber prekey under `IK_B`, performs the PQXDH key agreement, and initialises the Double Ratchet. Any verification failure aborts the send.
 3. Alice's first message is a libsignal pre-key message. It carries what Bob needs to derive the same secret: Alice's identity key, her base key, the ids of the prekeys used, and the Kyber ciphertext. Like every message it is wrapped in Sealed Sender (1.6), so the server never sees these fields.
-4. Bob's libsignal processes the pre-key message and establishes the session. Valence's prekey store deletes the consumed one-time prekey in the same transaction that persists the message (4.3).
+4. Bob's libsignal processes the pre-key message and establishes the session. Valence's prekey store deletes any consumed EC and Kyber one-time private keys in the same transaction that persists the message (4.3); the last-resort Kyber key is retained.
 5. Identity keys are trusted on first use. A later change to a contact's identity key raises a blocking trust-change event (1.8).
 
 Valence does not restate the key-agreement formulas. The authoritative references are Signal's PQXDH and Double Ratchet specifications and the pinned libsignal source.
@@ -353,7 +354,7 @@ Valence uses two transports. The authenticated WebSocket is used only to **recei
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "envelope": "u8F2...3sA",
   "ttlSeconds": 2592000
 }
@@ -363,7 +364,7 @@ Response `201`:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "serverTs": 1760000000123
 }
 ```
@@ -385,7 +386,7 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 ```json
 {
   "type": "message.deliver",
-  "v": 1,
+  "v": 2,
   "serverSeq": 884213,
   "serverTs": 1760000000123,
   "envelope": "u8F2...3sA"
@@ -397,7 +398,7 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 ```json
 {
   "type": "delivery.confirm",
-  "v": 1,
+  "v": 2,
   "upToServerSeq": 884213
 }
 ```
@@ -407,7 +408,7 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 ```json
 {
   "type": "sync.resume",
-  "v": 1,
+  "v": 2,
   "afterServerSeq": 884200
 }
 ```
@@ -417,7 +418,7 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 ```json
 {
   "type": "error",
-  "v": 1,
+  "v": 2,
   "code": "RATE_LIMITED",
   "retryAfterMs": 2000
 }
@@ -429,7 +430,7 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "identityKey": "Zp0t...Lk",
   "signedPreKey": { "id": 12, "pub": "b7Xc...9d", "sig": "Qm4v...8w" },
   "kyberPreKey": { "id": 3, "pub": "k9Lp...2f", "sig": "Tn7a...5c" },
@@ -437,15 +438,15 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 }
 ```
 
-`oneTimePreKey` is absent when the mailbox's one-time prekeys are exhausted.
+`oneTimePreKey` is absent when the mailbox's EC one-time prekeys are exhausted. `kyberPreKey` is the oldest signed one-time Kyber prekey when one is available; otherwise it is the signed last-resort Kyber prekey. The field remains singular because PQXDH uses one KEM prekey per bundle.
 
-**Bundle fetch rules.** The request carries the recipient's delivery key in `X-Delivery-Key` (Base64URL) and no token. The server hashes the presented key with SHA-256 and compares the result in constant time with the stored hash. A missing or malformed header, a wrong delivery key, an unknown mailbox, and a malformed mailbox ID all return the same `401` without a body, and the server does the same hashing work whether or not the mailbox exists. Only after the check passes does the server read the bundle and consume one one-time prekey, the oldest stored one, in a single atomic step. A failed check never consumes a prekey. The signed and Kyber prekeys are returned unchanged and are never consumed.
+**Bundle fetch rules.** The request carries the recipient's delivery key in `X-Delivery-Key` (Base64URL) and no token. The server hashes the presented key with SHA-256 and compares the result in constant time with the stored hash. A missing or malformed header, a wrong delivery key, an unknown mailbox, and a malformed mailbox ID all return the same `401` without a body, and the server does the same hashing work whether or not the mailbox exists. Only after the check passes does one transaction read the mailbox, consume the oldest stored EC one-time prekey and then the oldest stored Kyber one-time prekey, and return the bundle. If no Kyber one-time prekey remains, the bundle uses the signed last-resort Kyber prekey. A failed check never consumes either kind of one-time prekey. Signed EC and last-resort Kyber prekeys are never consumed by bundle fetches.
 
 **Sender certificate** (`GET /v1/sender-certificate`, JWT-authenticated)
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "certificate": "c3Vw...Zg",
   "expiresAt": 1760086400000
 }
@@ -455,7 +456,7 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "challenge": "o_GcDVLnuEFk0PeqPBnihQAAAZnILapg3AvbRDgfBh0n2qmKIY6mkg43XfkU50P4TNzR_MK7vDU",
   "expiresAt": 1760000060000
 }
@@ -465,23 +466,26 @@ An unknown mailbox and an invalid delivery key both return `401`, so mailbox exi
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "challenge": "o_Gc...vDU",
   "mailboxId": "mbx_g4r2k7x5qmwv6bnzdcs3n4pe5a",
   "identityKey": "BUBB...Xl8",
   "signedPreKey": { "id": 1, "pub": "b7Xc...9d", "sig": "Qm4v...8w" },
   "kyberPreKey": { "id": 1, "pub": "k9Lp...2f", "sig": "Tn7a...5c" },
   "oneTimePreKeys": [ { "id": 1, "pub": "mC9e...Qw" }, { "id": 2, "pub": "Hq4s...Zt" } ],
+  "oneTimeKyberPreKeys": [ { "id": 101, "pub": "p8Qw...sA", "sig": "Vb7c...hJ" } ],
   "deliveryKeyHash": "okzXGtAP2XnoXQ2TBid7-UcFdh-qf7-T807d9PDTPQs",
   "proof": "Rk2p...Jw"
 }
 ```
 
+`oneTimeKyberPreKeys` is optional and defaults to an empty list for existing clients. Each entry is signed by the identity key over its exact serialized `pub` bytes.
+
 Response `201`, and the same body is the response of the login endpoint:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "accessToken": "eyJh...ifQ.c2ln...bm90",
   "expiresAt": 1760003601000
 }
@@ -491,7 +495,7 @@ Response `201`, and the same body is the response of the login endpoint:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "mailboxId": "mbx_g4r2k7x5qmwv6bnzdcs3n4pe5a",
   "challenge": "o_Gc...vDU",
   "signature": "Vb8d...Ke"
@@ -502,8 +506,9 @@ Response `201`, and the same body is the response of the login endpoint:
 
 ```json
 {
-  "v": 1,
-  "oneTimeRemaining": 17
+  "v": 2,
+  "oneTimeRemaining": 17,
+  "oneTimeKyberRemaining": 4
 }
 ```
 
@@ -511,7 +516,7 @@ Response `201`, and the same body is the response of the login endpoint:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "signedPreKey": { "id": 2, "pub": "b7Xc...9d", "sig": "Qm4v...8w" },
   "kyberPreKey": { "id": 2, "pub": "k9Lp...2f", "sig": "Tn7a...5c" }
 }
@@ -521,8 +526,20 @@ Response `201`, and the same body is the response of the login endpoint:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "oneTimePreKeys": [ { "id": 101, "pub": "mC9e...Qw" }, { "id": 102, "pub": "Hq4s...Zt" } ]
+}
+```
+
+**Upload one-time Kyber prekeys** (`POST /v1/keys/kyber-one-time`, JWT-authenticated, response is the key status body)
+
+```json
+{
+  "v": 2,
+  "oneTimeKyberPreKeys": [
+    { "id": 101, "pub": "p8Qw...sA", "sig": "Vb7c...hJ" },
+    { "id": 102, "pub": "t3Yx...qB", "sig": "Zc8d...jK" }
+  ]
 }
 ```
 
@@ -530,7 +547,7 @@ The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/
 
 **Field semantics.**
 
-- `v` is the integer protocol version of a body. The current version is 1. The server accepts N and N-1.
+- `v` is the integer protocol version of a body. The current version is 2. The server accepts N and N-1.
 - `serverTs` and `expiresAt` are Unix epoch milliseconds in UTC. `serverTs` is the server's clock at the moment it accepts a message, never the sender's clock.
 - `envelope` is the Base64URL encoding of the sealed envelope (1.6). The server treats it as opaque bytes.
 - `ttlSeconds` is optional and states how long the server may keep an uncollected message. If it is absent, the server applies its default of 30 days. The server clamps larger values to 30 days and rejects values below 1 with `400`.
@@ -541,13 +558,13 @@ The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/
 
 **Keys and prekey ids.**
 
-- `identityKey` and every `pub` are public keys. `sig` is the identity key's signature over the corresponding `pub`. One-time prekeys carry no signature.
+- `identityKey` and every `pub` are public keys. `sig` is the identity key's signature over the exact serialized `pub` bytes, including the key type byte. Signed EC and all Kyber prekeys, including one-time Kyber prekeys, carry a signature. EC one-time prekeys carry no signature.
 - A prekey `id` is assigned by the client that owns the key, at the moment it generates the key. Ids come from a counter that is persisted per key kind and never reused. An id is a positive 32-bit integer (1 to 2,147,483,647).
-- Signed, Kyber, and one-time prekeys have separate id namespaces. Id 3 can exist as a signed prekey, a Kyber prekey, and a one-time prekey at the same time. The client and server schemas (3.2, 4.3) already store each kind separately.
+- EC signed-prekey and EC one-time-prekey IDs use separate namespaces. All Kyber IDs share one namespace, including the signed last-resort key and one-time Kyber keys; those IDs must not collide. An ID may be reused across the EC and Kyber namespaces.
 - The server treats an id as an opaque label. It stores the id with the key and returns it unchanged. An upload that repeats an id of the same kind in the same mailbox is rejected.
-- `challenge` is an opaque Base64URL string. `deliveryKeyHash` is the Base64URL SHA-256 of the delivery key. A mailbox ID is `mbx_` followed by 26 lowercase base32 characters (`a` to `z` and `2` to `7`) that encode exactly 128 bits, so the last character is one of `a`, `e`, `i`, `m`, `q`, `u`, `y`, or `4`. The same 128 bits have a UUID form, the 16 bytes written as a UUID, which is the sender identifier inside sender certificates. Registration carries 1 to 100 one-time prekeys with unique positive ids.
+- `challenge` is an opaque Base64URL string. `deliveryKeyHash` is the Base64URL SHA-256 of the delivery key. A mailbox ID is `mbx_` followed by 26 lowercase base32 characters (`a` to `z` and `2` to `7`) that encode exactly 128 bits, so the last character is one of `a`, `e`, `i`, `m`, `q`, `u`, `y`, or `4`. The same 128 bits have a UUID form, the 16 bytes written as a UUID, which is the sender identifier inside sender certificates. Registration carries 1 to 100 EC one-time prekeys and 0 to 100 signed one-time Kyber prekeys; IDs are unique within their namespace.
 - `accessToken` is a JWT. Its `expiresAt` in the body is in milliseconds, while the `iat` and `exp` claims inside the JWT are in seconds.
-- Key management rules. The server verifies every `sig` under the mailbox's stored identity key and answers `400` for an invalid signature. `PUT /v1/keys/signed` replaces the signed and Kyber prekeys together and atomically. `POST /v1/keys/one-time` accepts 1 to 100 keys and answers `400` if the upload would leave more than 200 one-time prekeys stored. An id that already exists for the same kind returns `409`. The authenticated key endpoints answer `401` when the token is missing, invalid, or expired, or when its mailbox no longer exists. `PUT /v1/keys/signed` answers `409` if either new id equals the id currently stored for that kind, and `204` on success. `POST /v1/keys/one-time` answers `409` if any id is already stored, `400` for an empty batch, more than 100 keys, repeated ids within the batch, or an upload that would exceed the stored limit, and `200` with the key status body on success. Structural checks run before signature verification. A client keeps the private keys of rotated signed and Kyber prekeys for at least 30 days after rotation, because a bundle fetched before the rotation can still be used for a message that arrives within the 30-day TTL.
+- Key management rules. The server verifies every signed EC and Kyber key's `sig` under the mailbox's stored identity key and answers `400` for an invalid signature. `PUT /v1/keys/signed` replaces the signed EC and last-resort Kyber prekeys together and atomically. `POST /v1/keys/one-time` accepts 1 to 100 unsigned EC keys; `POST /v1/keys/kyber-one-time` accepts 1 to 100 signed Kyber keys. Each kind has a maximum of 200 stored one-time keys. An ID that already exists in its namespace returns `409`; this includes a Kyber upload colliding with the current last-resort Kyber ID and a last-resort replacement colliding with a stored one-time Kyber ID. The authenticated key endpoints answer `401` when the token is missing, invalid, or expired, or when its mailbox no longer exists. `PUT /v1/keys/signed` answers `409` if either new ID equals the ID currently stored for its kind or the Kyber ID exists among one-time Kyber keys, and `204` on success. Both one-time upload endpoints answer `409` for stored-ID collisions and `400` for an empty batch, more than 100 keys, repeated IDs within the batch, or an upload that would exceed the stored limit. The Kyber endpoint also answers `400` for invalid signatures. Successful uploads answer `200` with the key status body. Structural checks run before signature verification. A client keeps the private keys of rotated signed and last-resort Kyber prekeys for at least 30 days after rotation, because a bundle fetched before the rotation can still be used for a message that arrives within the 30-day TTL.
 - The sender names the prekeys it used by id in its first message, and the recipient uses those ids to find the matching private keys. Because ids are never reused, a bundle fetched earlier can never point to a different key than the one the sender saw.
 
 **Decrypted plaintext structure** (never visible to the server):
@@ -602,6 +619,18 @@ CREATE TABLE one_time_prekey (
 
 CREATE INDEX idx_one_time_prekey_fifo ON one_time_prekey (mailbox_id, prekey_sequence ASC);
 
+CREATE TABLE one_time_kyber_prekey (
+    prekey_sequence BIGINT GENERATED ALWAYS AS IDENTITY,
+    mailbox_id      TEXT    NOT NULL REFERENCES mailbox(mailbox_id) ON DELETE CASCADE,
+    prekey_id       INTEGER NOT NULL CHECK (prekey_id > 0),
+    public_key      BYTEA   NOT NULL,
+    signature       BYTEA   NOT NULL,
+    PRIMARY KEY (mailbox_id, prekey_id),
+    UNIQUE (mailbox_id, prekey_sequence)
+);
+
+CREATE INDEX idx_one_time_kyber_prekey_fifo ON one_time_kyber_prekey (mailbox_id, prekey_sequence ASC);
+
 CREATE TABLE inbox_message (
     mailbox_id TEXT        NOT NULL REFERENCES mailbox(mailbox_id) ON DELETE CASCADE,
     server_seq BIGINT      NOT NULL CHECK (server_seq > 0),
@@ -614,7 +643,7 @@ CREATE TABLE inbox_message (
 CREATE INDEX idx_inbox_expiry ON inbox_message (expires_at);
 ```
 
-`envelope` is stored as received. There is no sender column, no plaintext index, and no message-level analytics table. The sender-certificate signing key is held in the server's secret store and never in this database. `next_server_seq` provides a durable, monotonic per-mailbox sequence counter. `prekey_sequence` preserves exact FIFO drain ordering across repeated one-time prekey batch uploads independently of client-assigned IDs. `mailbox_socket_state` holds the authoritative generation for the single active socket per mailbox. The migration backfills this row for existing mailboxes; registration creates it in the same transaction as a new mailbox.
+`envelope` is stored as received. There is no sender column, no plaintext index, and no message-level analytics table. The sender-certificate signing key is held in the server's secret store and never in this database. `next_server_seq` provides a durable, monotonic per-mailbox sequence counter. Each one-time prekey table uses `prekey_sequence` to preserve FIFO drain ordering across uploads independently of client-assigned IDs. Kyber IDs are also checked against the mailbox's last-resort Kyber ID while the mailbox row is locked. `mailbox_socket_state` holds the authoritative generation for the single active socket per mailbox. The migration backfills this row for existing mailboxes; registration creates it in the same transaction as a new mailbox.
 
 ### 3.3 Android Local Schema (Room over SQLCipher)
 
@@ -1005,7 +1034,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 
 **Supply chain.** Dependencies are pinned through a version catalog with verification metadata enabled. Release builds are reproducible. libsignal is the highest-risk dependency: it is pinned to an exact version, its native libraries are verified, desktop native libraries are excluded from the APK, and upgrades happen only through a reviewed pull request that includes a reading of its changelog. libsignal is published for Signal's own use and its use outside Signal is not supported upstream. Valence contains that risk by confining it behind the `:core:crypto` interfaces.
 
-**libsignal distribution.** libsignal is taken only from Signal's own Maven repository, `https://build-artifacts.signal.org/libraries/maven/`, because Maven Central ends at version 0.86.5 (November 2025). The build restricts that repository to the `org.signal` group, and third-party republications of libsignal are never used. The official `libsignal-client` and `libsignal-server` artifacts bundle native libraries for x86_64 Debian-flavoured Linux, Windows x86_64, and macOS (x86_64 and arm64). The server therefore runs on x86_64 glibc Linux, not on Alpine and not on ARM64, unless libsignal is built from source. The server pins `org.signal:libsignal-server` 0.106.0.
+**libsignal distribution.** libsignal is taken only from Signal's own Maven repository, `https://build-artifacts.signal.org/libraries/maven/`, because Maven Central ends at version 0.86.5 (November 2025). The build restricts that repository to the `org.signal` group, and third-party republications of libsignal are never used. The official `libsignal-client` and `libsignal-server` artifacts bundle native libraries for x86_64 Debian-flavoured Linux, Windows x86_64, and macOS (x86_64 and arm64). The server therefore runs on x86_64 glibc Linux, not on Alpine and not on ARM64, unless libsignal is built from source. The server pins `org.signal:libsignal-server` 0.106.2.
 
 **Deployment.** The server runs on x86_64 Linux with glibc, as libsignal requires, in a container built from `server/Dockerfile` with the repository root as the build context. Configuration is by environment variables: `PORT`, `VALENCE_DATABASE_URL`, `VALENCE_DATABASE_USER`, `VALENCE_DATABASE_PASSWORD`, `VALENCE_DB_MAX_CONNECTIONS` (default 10), `VALENCE_DB_AUTO_MIGRATE` (default true), `VALENCE_SHUTDOWN_DRAIN_MS` (default 0, maximum 60,000), optional `VALENCE_REDIS_URL` and `VALENCE_REDIS_CHANNEL_PREFIX`, `VALENCE_CHALLENGE_KEY`, `VALENCE_TOKEN_KEY`, `VALENCE_SERVER_CERTIFICATE`, `VALENCE_CERTIFICATE_KEY`, and optionally `VALENCE_TRUST_PROXY_HEADERS` and `VALENCE_METRICS_TOKEN`. Redis 8 is used under its AGPLv3 licensing option for Pub/Sub signalling only. Redis is optional at startup; `/ready` validates PostgreSQL and returns 503 during shutdown drain, and Redis disconnection is reported as degraded notification service while polling preserves delivery. Redis is reachable only over a private network, uses ACL-limited credentials, enables TLS when crossing a trust boundary, and exposes no public port. When Redis is configured, `VALENCE_REDIS_CHANNEL_PREFIX` is required and isolates channels by environment. At startup, the server validates database connectivity and runs Flyway migrations automatically unless `VALENCE_DB_AUTO_MIGRATE=false`. During rollout, apply additive migrations first and do not rely on generation fencing or enable multi-instance traffic until every node runs the fencing-capable version. The total PostgreSQL connection budget is the per-instance Hikari maximum multiplied by the number of server instances, plus operational headroom. The health endpoint (`/health`) reports process liveness; the readiness endpoint (`/ready`) validates database connectivity outside shutdown. The key ceremony has three commands, `generateTrustRoot`, `generateServerKey`, and `signServerCertificate`, so that the trust root private key is only ever used on an offline machine. A fourth command, `generateCertificateKeys`, prints every key at once for development and must not be used for production. A continuous integration job builds the image and checks that the container starts, loads libsignal, and answers its health, readiness, challenge, and authentication endpoints. `docs/OPERATIONS.md` is the runbook.
 
@@ -1020,7 +1049,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Crypto library | libsignal vs. Tink with a custom ratchet vs. Olm/vodozemac | **Decided: libsignal.** See Appendix A. |
 | Project licence | AGPL-3.0 vs. other | **Decided: AGPL-3.0.** libsignal is AGPL-3.0, so the combined work must be distributed under a compatible licence. |
 | Unseal API split | Pinned libsignal exposes unsealing separately from session decryption, or it does not | Verify when the dependency is added. If not, run K = 1 or add a thin adapter (see 4.3). |
-| Kyber prekeys | Last-resort only (v1) vs. one-time plus last-resort | Last-resort only in v1; add one-time Kyber prekeys before any public release. |
+| Kyber prekeys | Last-resort only vs. one-time plus last-resort | **Decided: one-time plus last-resort before public release.** Bundles contain one signed Kyber key: the oldest available one-time key, falling back to last-resort. One-time Kyber keys are identity-signed; each prekey kind has its defined ID namespace (3.1). |
 | Certificate trust root | Where the pinned trust root comes from and how it rotates | **Decided.** The trust root key pair is generated offline. The public key is shipped in the app and the private key never reaches the server. The server holds a server certificate signed by the trust root and the matching signing key (see 1.6). Rotating the server key needs no app update, and rotating the trust root needs an app update. |
 | Delivery key rotation | How a leaked key is replaced and redistributed | Rotation sends the new key to every contact in an encrypted message. Specify the retry behaviour for contacts that are offline. |
 | Multi-device | Per-device sessions (Signal model) vs. single device | Single device in v1 (a fixed device id); schema keyed by `contact_id` extends to `(contact_id, device_id)` |

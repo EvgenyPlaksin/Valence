@@ -28,7 +28,7 @@ class RegistrationService(
                 deliveryKeyHash = registration.deliveryKeyHash,
                 createdAtMillis = clock.millis(),
             )
-        return if (store.create(mailbox, registration.oneTimePreKeys)) {
+        return if (store.create(mailbox, registration.oneTimePreKeys, registration.oneTimeKyberPreKeys)) {
             RegistrationResult.Registered(mailbox.id, tokens.issue(mailbox.id))
         } else {
             RegistrationResult.Rejected(RegistrationRejection.MAILBOX_EXISTS)
@@ -70,10 +70,16 @@ class RegistrationService(
 
     private fun hasValidPreKeySignatures(registration: Registration): Boolean =
         isSignedBy(registration.identityKey, registration.signedPreKey) &&
-            isSignedBy(registration.identityKey, registration.kyberPreKey)
+            isSignedBy(registration.identityKey, registration.kyberPreKey) &&
+            registration.oneTimeKyberPreKeys.all { isSignedBy(registration.identityKey, it) }
 
     private fun isSignedBy(
         identityKey: ByteArray,
         key: SignedPublicKey,
+    ): Boolean = keyVerifier.verifySignature(identityKey, key.publicKey, key.signature)
+
+    private fun isSignedBy(
+        identityKey: ByteArray,
+        key: OneTimeKyberPreKey,
     ): Boolean = keyVerifier.verifySignature(identityKey, key.publicKey, key.signature)
 }

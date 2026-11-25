@@ -12,6 +12,7 @@ data class RegisterRequest(
     val signedPreKey: SignedPreKeyDto,
     val kyberPreKey: KyberPreKeyDto,
     val oneTimePreKeys: List<OneTimePreKeyDto>,
+    val oneTimeKyberPreKeys: List<KyberPreKeyDto> = emptyList(),
     val deliveryKeyHash: String,
     val proof: String,
 )

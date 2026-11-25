@@ -4,7 +4,9 @@ import com.lnight.valence.server.RegistrationTestSupport.MAILBOX_ID
 import com.lnight.valence.server.domain.KeyManagementService
 import com.lnight.valence.server.domain.KeyUpdateRejection
 import com.lnight.valence.server.domain.KeyUpdateResult
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
+import com.lnight.valence.server.domain.PreKeyCounts
 import com.lnight.valence.server.domain.PreKeyReplacement
 import com.lnight.valence.server.domain.PublicKeyVerifier
 import com.lnight.valence.server.domain.SignedPublicKey
@@ -22,6 +24,7 @@ class KeyManagementServiceTest {
         InMemoryMailboxStore().seed(
             RegistrationTestSupport.mailbox(),
             RegistrationTestSupport.defaultOneTimePreKeys(),
+            RegistrationTestSupport.defaultOneTimeKyberPreKeys(),
         )
 
     private fun service(verifier: PublicKeyVerifier = FakePublicKeyVerifier()) = KeyManagementService(verifier, store)
@@ -40,12 +43,15 @@ class KeyManagementServiceTest {
 
     private fun oneTime(ids: IntRange) = ids.map { OneTimePreKey(it, ByteArray(33) { 7 }) }
 
+    private fun oneTimeKyber(ids: IntRange) =
+        ids.map { OneTimeKyberPreKey(it, ByteArray(1569) { 6 }, ByteArray(64) { 3 }) }
+
     private fun rejected(reason: KeyUpdateRejection) = KeyUpdateResult.Rejected(reason)
 
     @Test
     fun `status reports the stored one time keys`() =
         runBlocking {
-            assertEquals(2, service().status(MAILBOX_ID))
+            assertEquals(PreKeyCounts(2, 2), service().status(MAILBOX_ID))
             assertNull(service().status(unknownMailbox))
         }
 
@@ -54,7 +60,7 @@ class KeyManagementServiceTest {
         runBlocking {
             val result = service().replaceSignedPreKeys(MAILBOX_ID, replacement())
 
-            assertEquals(KeyUpdateResult.Updated(2), result)
+            assertEquals(KeyUpdateResult.Updated(2, 2), result)
             assertEquals(2, store.find(MAILBOX_ID)?.signedPreKey?.id)
             assertEquals(2, store.find(MAILBOX_ID)?.kyberPreKey?.id)
         }
@@ -144,7 +150,7 @@ class KeyManagementServiceTest {
     @Test
     fun `uploaded one time keys are added`() =
         runBlocking {
-            assertEquals(KeyUpdateResult.Updated(4), service().uploadOneTimePreKeys(MAILBOX_ID, oneTime(101..102)))
+            assertEquals(KeyUpdateResult.Updated(4, 2), service().uploadOneTimePreKeys(MAILBOX_ID, oneTime(103..104)))
         }
 
     @Test
@@ -171,21 +177,21 @@ class KeyManagementServiceTest {
                 rejected(KeyUpdateRejection.ID_EXISTS),
                 service().uploadOneTimePreKeys(MAILBOX_ID, oneTime(2..3)),
             )
-            assertEquals(2, service().status(MAILBOX_ID))
+            assertEquals(PreKeyCounts(2, 2), service().status(MAILBOX_ID))
         }
 
     @Test
     fun `an upload beyond the stored limit is rejected`() =
         runBlocking {
             assertEquals(
-                KeyUpdateResult.Updated(102),
+                KeyUpdateResult.Updated(102, 2),
                 service().uploadOneTimePreKeys(MAILBOX_ID, oneTime(101..200)),
             )
             assertEquals(
                 rejected(KeyUpdateRejection.MALFORMED),
                 service().uploadOneTimePreKeys(MAILBOX_ID, oneTime(201..300)),
             )
-            assertEquals(102, service().status(MAILBOX_ID))
+            assertEquals(PreKeyCounts(102, 2), service().status(MAILBOX_ID))
         }
 
     @Test
@@ -195,5 +201,82 @@ class KeyManagementServiceTest {
                 rejected(KeyUpdateRejection.UNKNOWN_MAILBOX),
                 service().uploadOneTimePreKeys(unknownMailbox, oneTime(101..102)),
             )
+        }
+
+    @Test
+    fun `uploaded one time kyber keys are signed and counted`() =
+        runBlocking {
+            assertEquals(
+                KeyUpdateResult.Updated(2, 4),
+                service().uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(103..104)),
+            )
+        }
+
+    @Test
+    fun `one time kyber batches reject malformed keys before signature checks`() =
+        runBlocking {
+            val verifier = FakePublicKeyVerifier(isKeyValid = { false }, isSignatureValid = { false })
+            val service = service(verifier)
+
+            assertEquals(
+                rejected(KeyUpdateRejection.MALFORMED),
+                service.uploadOneTimeKyberPreKeys(MAILBOX_ID, emptyList()),
+            )
+            assertEquals(
+                rejected(KeyUpdateRejection.MALFORMED),
+                service.uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(200..300)),
+            )
+            assertEquals(
+                rejected(KeyUpdateRejection.MALFORMED),
+                service.uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(103..104)),
+            )
+            assertTrue(verifier.verifications.isEmpty())
+        }
+
+    @Test
+    fun `invalid one time kyber signatures are rejected`() =
+        runBlocking {
+            val verifier = FakePublicKeyVerifier(isSignatureValid = { false })
+
+            assertEquals(
+                rejected(KeyUpdateRejection.INVALID_SIGNATURE),
+                service(verifier).uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(103..104)),
+            )
+        }
+
+    @Test
+    fun `one time kyber ids cannot collide with stored kyber ids`() =
+        runBlocking {
+            assertEquals(
+                rejected(KeyUpdateRejection.ID_EXISTS),
+                service().uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(1..1)),
+            )
+            assertEquals(
+                rejected(KeyUpdateRejection.ID_EXISTS),
+                service().uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(101..101)),
+            )
+            assertEquals(
+                rejected(KeyUpdateRejection.ID_EXISTS),
+                service().replaceSignedPreKeys(MAILBOX_ID, replacement(kyberId = 101)),
+            )
+            assertEquals(PreKeyCounts(2, 2), service().status(MAILBOX_ID))
+        }
+
+    @Test
+    fun `one time kyber batches enforce the independent stored limit`() =
+        runBlocking {
+            assertEquals(
+                KeyUpdateResult.Updated(2, 102),
+                service().uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(1_000..1_099)),
+            )
+            assertEquals(
+                KeyUpdateResult.Updated(2, 200),
+                service().uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(1_100..1_197)),
+            )
+            assertEquals(
+                rejected(KeyUpdateRejection.MALFORMED),
+                service().uploadOneTimeKyberPreKeys(MAILBOX_ID, oneTimeKyber(1_198..1_199)),
+            )
+            assertEquals(PreKeyCounts(2, 200), service().status(MAILBOX_ID))
         }
 }

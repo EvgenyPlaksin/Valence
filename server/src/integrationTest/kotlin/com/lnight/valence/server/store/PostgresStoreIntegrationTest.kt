@@ -6,6 +6,7 @@ import com.lnight.valence.server.domain.ConfirmResult
 import com.lnight.valence.server.domain.InboxPollResult
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.NewMessage
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.SignedPublicKey
 import com.lnight.valence.server.routes.ServerMetrics
@@ -41,7 +42,12 @@ class PostgresStoreIntegrationTest {
             .getConnection(configuration.url, configuration.username, configuration.password)
             .use { connection ->
                 connection.createStatement().use { statement ->
-                    statement.execute("TRUNCATE TABLE inbox_message, one_time_prekey, mailbox RESTART IDENTITY CASCADE")
+                    statement.execute(
+                        """
+                        TRUNCATE TABLE inbox_message, one_time_kyber_prekey, one_time_prekey,
+                            mailbox RESTART IDENTITY CASCADE
+                        """.trimIndent(),
+                    )
                 }
             }
     }
@@ -56,6 +62,14 @@ class PostgresStoreIntegrationTest {
                 assertFails { database.mailboxStore.create(mailbox, duplicateKeys) }
 
                 assertNull(database.mailboxStore.find(mailbox.id))
+
+                val duplicateKyberKeys =
+                    listOf(
+                        OneTimeKyberPreKey(101, bytes(11), bytes(64)),
+                        OneTimeKyberPreKey(101, bytes(12), bytes(64)),
+                    )
+                assertFails { database.mailboxStore.create(mailbox, emptyList(), duplicateKyberKeys) }
+                assertNull(database.mailboxStore.find(mailbox.id))
             }
         }
 
@@ -68,18 +82,40 @@ class PostgresStoreIntegrationTest {
                     database.mailboxStore.create(
                         mailbox,
                         listOf(OneTimePreKey(20, bytes(20)), OneTimePreKey(10, bytes(10))),
+                        listOf(
+                            OneTimeKyberPreKey(30, bytes(30), bytes(64)),
+                            OneTimeKyberPreKey(25, bytes(25), bytes(64)),
+                        ),
                     ),
                 )
                 assertEquals(2, database.mailboxStore.oneTimePreKeyCount(mailbox.id))
+                assertEquals(2, database.mailboxStore.oneTimeKyberPreKeyCount(mailbox.id))
+
+                assertEquals(
+                    com.lnight.valence.server.domain.KeyStoreOutcome.ID_EXISTS,
+                    database.mailboxStore.addOneTimeKyberPreKeys(
+                        mailbox.id,
+                        listOf(OneTimeKyberPreKey(1, bytes(1), bytes(64))),
+                        200,
+                    ),
+                )
+                assertEquals(
+                    com.lnight.valence.server.domain.KeyStoreOutcome.ID_EXISTS,
+                    database.mailboxStore.replaceSignedPreKeys(mailbox.id, signed(2), signed(30)),
+                )
 
                 val first = database.mailboxStore.takeBundle(mailbox.id)
                 val second = database.mailboxStore.takeBundle(mailbox.id)
                 val exhausted = database.mailboxStore.takeBundle(mailbox.id)
 
                 assertEquals(20, first?.oneTimePreKey?.id)
+                assertEquals(30, first?.oneTimeKyberPreKey?.id)
                 assertEquals(10, second?.oneTimePreKey?.id)
+                assertEquals(25, second?.oneTimeKyberPreKey?.id)
                 assertNull(exhausted?.oneTimePreKey)
+                assertNull(exhausted?.oneTimeKyberPreKey)
                 assertEquals(0, database.mailboxStore.oneTimePreKeyCount(mailbox.id))
+                assertEquals(0, database.mailboxStore.oneTimeKyberPreKeyCount(mailbox.id))
 
                 assertEquals(
                     com.lnight.valence.server.domain.KeyStoreOutcome.UPDATED,
@@ -163,21 +199,45 @@ class PostgresStoreIntegrationTest {
             database().use { database ->
                 val mailbox = mailbox("mailbox-concurrent-prekeys")
                 val keys = (1..20).map { OneTimePreKey(it, bytes(it)) }
-                database.mailboxStore.create(mailbox, keys)
+                val kyberKeys = (101..120).map { OneTimeKyberPreKey(it, bytes(it), bytes(64)) }
+                database.mailboxStore.create(mailbox, keys, kyberKeys)
 
-                val results =
+                val bundles =
                     (1..20)
                         .map {
                             async(Dispatchers.IO) {
-                                database.mailboxStore
-                                    .takeBundle(mailbox.id)
-                                    ?.oneTimePreKey
-                                    ?.id
+                                database.mailboxStore.takeBundle(mailbox.id)
                             }
                         }.awaitAll()
+                val results = bundles.mapNotNull { it?.oneTimePreKey?.id }
+                val kyberResults = bundles.mapNotNull { it?.oneTimeKyberPreKey?.id }
 
                 assertEquals((1..20).toSet(), results.toSet())
+                assertEquals((101..120).toSet(), kyberResults.toSet())
                 assertEquals(0, database.mailboxStore.oneTimePreKeyCount(mailbox.id))
+                assertEquals(0, database.mailboxStore.oneTimeKyberPreKeyCount(mailbox.id))
+            }
+        }
+
+    @Test
+    fun bundleFetchRollbackPreservesBothOneTimePrekeyQueues() =
+        runTest {
+            database().use { database ->
+                val mailbox = mailbox("mailbox-prekey-rollback")
+                database.mailboxStore.create(
+                    mailbox,
+                    listOf(OneTimePreKey(10, bytes(10))),
+                    listOf(OneTimeKyberPreKey(110, bytes(110), bytes(64))),
+                )
+                installKyberDeleteFailure()
+                try {
+                    assertFails { database.mailboxStore.takeBundle(mailbox.id) }
+                } finally {
+                    removeKyberDeleteFailure()
+                }
+
+                assertEquals(1, database.mailboxStore.oneTimePreKeyCount(mailbox.id))
+                assertEquals(1, database.mailboxStore.oneTimeKyberPreKeyCount(mailbox.id))
             }
         }
 
@@ -382,6 +442,45 @@ class PostgresStoreIntegrationTest {
     private fun signed(id: Int) = SignedPublicKey(id, bytes(33), bytes(64))
 
     private fun bytes(value: Int) = ByteArray(32) { value.toByte() }
+
+    private fun installKyberDeleteFailure() {
+        val configuration = databaseConfiguration()
+        DriverManager
+            .getConnection(configuration.url, configuration.username, configuration.password)
+            .use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        CREATE FUNCTION fail_one_time_kyber_delete() RETURNS trigger
+                        LANGUAGE plpgsql AS $$
+                        BEGIN
+                            RAISE EXCEPTION 'injected Kyber prekey delete failure';
+                        END;
+                        $$
+                        """.trimIndent(),
+                    )
+                    statement.execute(
+                        """
+                        CREATE TRIGGER fail_one_time_kyber_delete
+                        BEFORE DELETE ON one_time_kyber_prekey
+                        FOR EACH ROW EXECUTE FUNCTION fail_one_time_kyber_delete()
+                        """.trimIndent(),
+                    )
+                }
+            }
+    }
+
+    private fun removeKyberDeleteFailure() {
+        val configuration = databaseConfiguration()
+        DriverManager
+            .getConnection(configuration.url, configuration.username, configuration.password)
+            .use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute("DROP TRIGGER IF EXISTS fail_one_time_kyber_delete ON one_time_kyber_prekey")
+                    statement.execute("DROP FUNCTION IF EXISTS fail_one_time_kyber_delete()")
+                }
+            }
+    }
 
     private companion object {
         val postgres = PostgreSQLContainer<Nothing>("postgres:17")

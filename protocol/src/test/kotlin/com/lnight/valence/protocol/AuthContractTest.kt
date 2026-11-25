@@ -6,6 +6,7 @@ import com.lnight.valence.protocol.http.AuthTokenRequest
 import com.lnight.valence.protocol.http.RegisterRequest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class AuthContractTest {
     @Test
@@ -21,6 +22,18 @@ class AuthContractTest {
 
         assertEquals("mbx_g4r2k7x5qmwv6bnzdcs3n4pe5a", request.mailboxId)
         assertEquals(listOf(1, 2), request.oneTimePreKeys.map { it.id })
+        assertEquals(listOf(101, 102), request.oneTimeKyberPreKeys.map { it.id })
+    }
+
+    @Test
+    fun `register request emits an empty kyber list when omitted`() {
+        val request =
+            ContractAssertions.roundTrip(
+                "register-request-no-one-time-kyber",
+                RegisterRequest.serializer(),
+            )
+
+        assertTrue(request.oneTimeKyberPreKeys.isEmpty())
     }
 
     @Test

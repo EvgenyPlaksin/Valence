@@ -2,6 +2,7 @@ package com.lnight.valence.server
 
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.MailboxStore
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PublicKeyVerifier
 import com.lnight.valence.server.store.InMemoryMailboxStore
@@ -38,15 +39,18 @@ internal class RecordingMailboxStore(
 ) : MailboxStore by delegate {
     val created = mutableListOf<Mailbox>()
     val createdOneTimeKeys = mutableListOf<List<OneTimePreKey>>()
+    val createdOneTimeKyberKeys = mutableListOf<List<OneTimeKyberPreKey>>()
 
     override suspend fun create(
         mailbox: Mailbox,
         oneTimePreKeys: List<OneTimePreKey>,
+        oneTimeKyberPreKeys: List<OneTimeKyberPreKey>,
     ): Boolean {
         if (accepts) {
             created += mailbox
             createdOneTimeKeys += oneTimePreKeys
-            delegate.create(mailbox, oneTimePreKeys)
+            createdOneTimeKyberKeys += oneTimeKyberPreKeys
+            delegate.create(mailbox, oneTimePreKeys, oneTimeKyberPreKeys)
         }
         return accepts
     }

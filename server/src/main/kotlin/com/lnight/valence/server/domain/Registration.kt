@@ -7,6 +7,7 @@ class Registration(
     val signedPreKey: SignedPublicKey,
     val kyberPreKey: SignedPublicKey,
     val oneTimePreKeys: List<OneTimePreKey>,
+    val oneTimeKyberPreKeys: List<OneTimeKyberPreKey> = emptyList(),
     val deliveryKeyHash: ByteArray,
     val proof: ByteArray,
 )

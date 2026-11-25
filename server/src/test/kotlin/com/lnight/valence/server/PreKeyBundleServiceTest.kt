@@ -2,6 +2,7 @@ package com.lnight.valence.server
 
 import com.lnight.valence.server.domain.BundleResult
 import com.lnight.valence.server.domain.DeliveryKeyAuthenticator
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PreKeyBundleService
 import com.lnight.valence.server.domain.RateLimitPolicy
@@ -21,11 +22,16 @@ class PreKeyBundleServiceTest {
     private val key = DeliveryKeyTestSupport.deliveryKey
     private val clock = TestClock(ChallengeTestSupport.ISSUED_AT_MILLIS)
 
-    private fun store(oneTimeCount: Int = 2) =
-        InMemoryMailboxStore().seed(
-            DeliveryKeyTestSupport.mailbox(),
-            (1..oneTimeCount).map { n -> OneTimePreKey(n, ByteArray(33) { 7 }) },
-        )
+    private fun store(
+        oneTimeCount: Int = 2,
+        oneTimeKyberCount: Int = 2,
+    ) = InMemoryMailboxStore().seed(
+        DeliveryKeyTestSupport.mailbox(),
+        (1..oneTimeCount).map { n -> OneTimePreKey(n, ByteArray(33) { 7 }) },
+        (101 until 101 + oneTimeKyberCount).map { n ->
+            OneTimeKyberPreKey(n, ByteArray(1569) { 8 }, ByteArray(64) { 9 })
+        },
+    )
 
     private fun service(
         store: InMemoryMailboxStore,
@@ -46,6 +52,7 @@ class PreKeyBundleServiceTest {
             assertEquals(1, bundle.signedPreKey.id)
             assertEquals(1, bundle.kyberPreKey.id)
             assertEquals(1, bundle.oneTimePreKey?.id)
+            assertEquals(101, bundle.oneTimeKyberPreKey?.id)
         }
 
     @Test
@@ -53,20 +60,52 @@ class PreKeyBundleServiceTest {
         runBlocking {
             val store = store()
             val service = service(store)
+            val first = service.bundle()
+            val second = service.bundle()
+            val exhausted = service.bundle()
 
-            assertEquals(1, service.bundle()?.oneTimePreKey?.id)
-            assertEquals(2, service.bundle()?.oneTimePreKey?.id)
+            assertEquals(1, first?.oneTimePreKey?.id)
+            assertEquals(101, first?.oneTimeKyberPreKey?.id)
+            assertEquals(2, second?.oneTimePreKey?.id)
+            assertEquals(102, second?.oneTimeKyberPreKey?.id)
+            assertNull(exhausted?.oneTimePreKey)
+            assertNull(exhausted?.oneTimeKyberPreKey)
             assertEquals(0, store.oneTimePreKeyCount(id))
+            assertEquals(0, store.oneTimeKyberPreKeyCount(id))
         }
 
     @Test
     fun `an exhausted mailbox still returns the signed and kyber prekeys`() =
         runBlocking {
-            val bundle = assertNotNull(service(store(oneTimeCount = 0)).bundle())
+            val bundle = assertNotNull(service(store(oneTimeCount = 0, oneTimeKyberCount = 0)).bundle())
 
             assertNull(bundle.oneTimePreKey)
+            assertNull(bundle.oneTimeKyberPreKey)
             assertEquals(1, bundle.signedPreKey.id)
             assertEquals(1, bundle.kyberPreKey.id)
+        }
+
+    @Test
+    fun `an exhausted kyber queue falls back while ec one time keys remain`() =
+        runBlocking {
+            val store = store(oneTimeCount = 1, oneTimeKyberCount = 0)
+            val bundle = assertNotNull(service(store).bundle())
+
+            assertEquals(1, bundle.oneTimePreKey?.id)
+            assertNull(bundle.oneTimeKyberPreKey)
+            assertEquals(1, bundle.kyberPreKey.id)
+            assertEquals(0, store.oneTimePreKeyCount(id))
+        }
+
+    @Test
+    fun `an exhausted ec queue does not prevent kyber one time delivery`() =
+        runBlocking {
+            val store = store(oneTimeCount = 0, oneTimeKyberCount = 1)
+            val bundle = assertNotNull(service(store).bundle())
+
+            assertNull(bundle.oneTimePreKey)
+            assertEquals(101, bundle.oneTimeKyberPreKey?.id)
+            assertEquals(0, store.oneTimeKyberPreKeyCount(id))
         }
 
     @Test
@@ -76,6 +115,7 @@ class PreKeyBundleServiceTest {
 
             assertEquals(BundleResult.Unauthorized, service(store).fetch(id, ByteArray(16) { 4 }))
             assertEquals(2, store.oneTimePreKeyCount(id))
+            assertEquals(2, store.oneTimeKyberPreKeyCount(id))
         }
 
     @Test
@@ -116,8 +156,11 @@ class PreKeyBundleServiceTest {
         executor.shutdown()
 
         val handedOut = bundles.mapNotNull { it?.oneTimePreKey?.id }
+        val kyberHandedOut = bundles.mapNotNull { it?.oneTimeKyberPreKey?.id }
         assertEquals(32, bundles.count { it != null })
         assertEquals(20, handedOut.size)
         assertEquals(20, handedOut.toSet().size)
+        assertEquals(2, kyberHandedOut.size)
+        assertEquals(2, kyberHandedOut.toSet().size)
     }
 }

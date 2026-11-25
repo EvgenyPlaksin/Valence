@@ -43,8 +43,17 @@ class RegistrationRoutesTest {
             assertEquals(HttpStatusCode.Created, response.status)
             val body = ProtocolJson.json.decodeFromString(AccessTokenResponse.serializer(), response.bodyAsText())
             assertEquals("token-for-${RegistrationTestSupport.MAILBOX_ID}", body.accessToken)
-            assertEquals(1, body.v)
+            assertEquals(2, body.v)
             assertEquals(RegistrationTestSupport.TOKEN_EXPIRY_MILLIS, body.expiresAt)
+        }
+
+    @Test
+    fun `the previous protocol version remains accepted`() =
+        testApplication {
+            start()
+            val request = RegistrationTestSupport.registerRequest().copy(v = 1)
+
+            assertEquals(HttpStatusCode.Created, client.register(json(request)).status)
         }
 
     @Test

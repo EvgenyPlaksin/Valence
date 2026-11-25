@@ -3,6 +3,7 @@ package com.lnight.valence.server
 import com.lnight.valence.protocol.SignedMessages
 import com.lnight.valence.server.RegistrationTestSupport.MAILBOX_ID
 import com.lnight.valence.server.crypto.LibsignalPublicKeyVerifier
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.Registration
 import com.lnight.valence.server.domain.RegistrationRejection
@@ -31,6 +32,11 @@ class RegistrationEndToEndTest {
         val deliveryKeyHash = ByteArray(32) { 9 }
         val signedPreKey = ECKeyPair.generate().publicKey.serialize()
         val kyberPreKey = KEMKeyPair.generate(KEMKeyType.KYBER_1024).publicKey.serialize()
+        val oneTimeKyberPreKeys =
+            (101..102).map {
+                val publicKey = KEMKeyPair.generate(KEMKeyType.KYBER_1024).publicKey.serialize()
+                OneTimeKyberPreKey(it, publicKey, identity.privateKey.calculateSignature(publicKey))
+            }
         val proofMessage =
             if (proofIsLoginMessage) {
                 SignedMessages.login(challenge, signedMailboxId)
@@ -44,6 +50,7 @@ class RegistrationEndToEndTest {
             signedPreKey = SignedPublicKey(1, signedPreKey, preKeySigner.privateKey.calculateSignature(signedPreKey)),
             kyberPreKey = SignedPublicKey(1, kyberPreKey, preKeySigner.privateKey.calculateSignature(kyberPreKey)),
             oneTimePreKeys = (1..100).map { OneTimePreKey(it, ECKeyPair.generate().publicKey.serialize()) },
+            oneTimeKyberPreKeys = oneTimeKyberPreKeys,
             deliveryKeyHash = deliveryKeyHash,
             proof = identity.privateKey.calculateSignature(proofMessage),
         )

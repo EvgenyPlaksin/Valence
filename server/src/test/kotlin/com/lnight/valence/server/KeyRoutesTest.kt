@@ -9,8 +9,10 @@ import com.lnight.valence.protocol.http.KyberPreKeyDto
 import com.lnight.valence.protocol.http.OneTimePreKeyDto
 import com.lnight.valence.protocol.http.ReplaceSignedPreKeysRequest
 import com.lnight.valence.protocol.http.SignedPreKeyDto
+import com.lnight.valence.protocol.http.UploadOneTimeKyberPreKeysRequest
 import com.lnight.valence.protocol.http.UploadOneTimePreKeysRequest
 import com.lnight.valence.server.RegistrationTestSupport.MAILBOX_ID
+import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PublicKeyVerifier
 import com.lnight.valence.server.store.InMemoryMailboxStore
@@ -36,9 +38,12 @@ class KeyRoutesTest {
     private fun ApplicationTestBuilder.start(
         verifier: PublicKeyVerifier = FakePublicKeyVerifier(),
         oneTimeCount: Int = 2,
+        oneTimeKyberCount: Int = 0,
     ): InMemoryMailboxStore {
         val keys = (1..oneTimeCount).map { OneTimePreKey(it, ByteArray(33) { 7 }) }
-        val store = InMemoryMailboxStore().seed(RegistrationTestSupport.mailbox(), keys)
+        val kyberKeys =
+            RegistrationTestSupport.defaultOneTimeKyberPreKeys().take(oneTimeKyberCount)
+        val store = InMemoryMailboxStore().seed(RegistrationTestSupport.mailbox(), keys, kyberKeys)
         application { module(TestServices.create(verifier, store)) }
         return store
     }
@@ -61,6 +66,16 @@ class KeyRoutesTest {
         bearer: String? = token,
     ): HttpResponse =
         post(ProtocolRoutes.KEYS_ONE_TIME) {
+            bearer?.let { bearerAuth(it) }
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+
+    private suspend fun HttpClient.uploadKyber(
+        body: String,
+        bearer: String? = token,
+    ): HttpResponse =
+        post(ProtocolRoutes.KEYS_KYBER_ONE_TIME) {
             bearer?.let { bearerAuth(it) }
             contentType(ContentType.Application.Json)
             setBody(body)
@@ -96,6 +111,21 @@ class KeyRoutesTest {
             ),
         )
 
+    private fun uploadKyberJson(ids: IntRange): String =
+        ProtocolJson.json.encodeToString(
+            UploadOneTimeKyberPreKeysRequest.serializer(),
+            UploadOneTimeKyberPreKeysRequest(
+                oneTimeKyberPreKeys =
+                    ids.map {
+                        KyberPreKeyDto(
+                            it,
+                            Base64Url.encode(ByteArray(1569) { 6 }),
+                            Base64Url.encode(RegistrationTestSupport.kyberPreKeySignature),
+                        )
+                    },
+            ),
+        )
+
     @Test
     fun `every key endpoint requires a valid token`() =
         testApplication {
@@ -105,6 +135,10 @@ class KeyRoutesTest {
             assertEquals(HttpStatusCode.Unauthorized, client.status(bearer = "garbage").status)
             assertEquals(HttpStatusCode.Unauthorized, client.replace(replaceJson(), bearer = null).status)
             assertEquals(HttpStatusCode.Unauthorized, client.upload(uploadJson(101..102), bearer = null).status)
+            assertEquals(
+                HttpStatusCode.Unauthorized,
+                client.uploadKyber(uploadKyberJson(103..104), bearer = null).status,
+            )
         }
 
     @Test
@@ -157,10 +191,18 @@ class KeyRoutesTest {
         }
 
     @Test
+    fun `replacing a last resort id already used by a one time kyber key answers 409`() =
+        testApplication {
+            start(oneTimeKyberCount = 1)
+
+            assertEquals(HttpStatusCode.Conflict, client.replace(replaceJson(kyberId = 101)).status)
+        }
+
+    @Test
     fun `unusable replacement bodies answer 400`() =
         testApplication {
             start()
-            val unsupported = replaceJson().replace("\"v\":1", "\"v\":99")
+            val unsupported = replaceJson().replace("\"v\":2", "\"v\":99")
 
             assertEquals(HttpStatusCode.BadRequest, client.replace("not json").status)
             assertEquals(HttpStatusCode.BadRequest, client.replace(unsupported).status)
@@ -176,6 +218,7 @@ class KeyRoutesTest {
             assertEquals(HttpStatusCode.OK, response.status)
             val body = ProtocolJson.json.decodeFromString(KeyStatusResponse.serializer(), response.bodyAsText())
             assertEquals(4, body.oneTimeRemaining)
+            assertEquals(0, body.oneTimeKyberRemaining)
         }
 
     @Test
@@ -200,5 +243,68 @@ class KeyRoutesTest {
             start()
 
             assertEquals(HttpStatusCode.BadRequest, client.upload("not json").status)
+        }
+
+    @Test
+    fun `uploading one time kyber keys answers 200 with both counts`() =
+        testApplication {
+            start()
+
+            val response = client.uploadKyber(uploadKyberJson(103..104))
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = ProtocolJson.json.decodeFromString(KeyStatusResponse.serializer(), response.bodyAsText())
+            assertEquals(2, body.oneTimeRemaining)
+            assertEquals(2, body.oneTimeKyberRemaining)
+        }
+
+    @Test
+    fun `one time kyber upload collisions answer 409`() =
+        testApplication {
+            start()
+
+            assertEquals(HttpStatusCode.Conflict, client.uploadKyber(uploadKyberJson(1..1)).status)
+        }
+
+    @Test
+    fun `one time kyber upload conflicts with an existing id`() =
+        testApplication {
+            start(oneTimeKyberCount = 1)
+
+            assertEquals(HttpStatusCode.Conflict, client.uploadKyber(uploadKyberJson(101..101)).status)
+        }
+
+    @Test
+    fun `invalid one time kyber signatures answer 400`() =
+        testApplication {
+            start(FakePublicKeyVerifier(isSignatureValid = { false }))
+
+            assertEquals(HttpStatusCode.BadRequest, client.uploadKyber(uploadKyberJson(103..104)).status)
+        }
+
+    @Test
+    fun `one time kyber signatures are required`() =
+        testApplication {
+            start(FakePublicKeyVerifier(isSignatureValid = { false }))
+
+            assertEquals(HttpStatusCode.BadRequest, client.uploadKyber(uploadKyberJson(103..104)).status)
+        }
+
+    @Test
+    fun `last resort replacement cannot reuse a stored one time kyber id`() =
+        testApplication {
+            start(oneTimeKyberCount = 1)
+
+            assertEquals(HttpStatusCode.Conflict, client.replace(replaceJson(kyberId = 101)).status)
+        }
+
+    @Test
+    fun `unusable one time kyber upload bodies answer 400`() =
+        testApplication {
+            start()
+            val unsupported = uploadKyberJson(103..104).replace("\"v\":2", "\"v\":99")
+
+            assertEquals(HttpStatusCode.BadRequest, client.uploadKyber("not json").status)
+            assertEquals(HttpStatusCode.BadRequest, client.uploadKyber(unsupported).status)
         }
 }

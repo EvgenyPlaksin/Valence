@@ -1,0 +1,7 @@
+{
+  "v": 2,
+  "oneTimeKyberPreKeys": [
+    { "id": 101, "pub": "p8QwL2nR5sA", "sig": "Vb7cD1fG4hJ" },
+    { "id": 102, "pub": "t3YxM6kP9qB", "sig": "Zc8dE2gH5jK" }
+  ]
+}

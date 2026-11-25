@@ -12,6 +12,19 @@ class PreKeyValidator(
             keys.map { it.id }.toSet().size == keys.size &&
             keys.all { it.id >= MIN_ID && keyVerifier.isValidEcKey(it.publicKey) }
 
+    fun areValidOneTimeKyberPreKeys(
+        keys: List<OneTimeKyberPreKey>,
+        allowEmpty: Boolean = false,
+    ): Boolean =
+        (allowEmpty || keys.isNotEmpty()) &&
+            keys.size <= MAX_PER_REQUEST &&
+            keys.map { it.id }.toSet().size == keys.size &&
+            keys.all {
+                it.id >= MIN_ID &&
+                    it.signature.size == WireSizes.SIGNATURE &&
+                    keyVerifier.isValidKemKey(it.publicKey)
+            }
+
     private fun isValidSigned(
         key: SignedPublicKey,
         isValidKey: (ByteArray) -> Boolean,

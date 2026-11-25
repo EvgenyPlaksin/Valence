@@ -1,7 +1,7 @@
 {
-  "v": 1,
+  "v": 2,
   "identityKey": "Zp0tQ8vXn2Lk",
   "signedPreKey": { "id": 12, "pub": "b7XcT1mQ9d", "sig": "Qm4vN6yR8w" },
-  "kyberPreKey": { "id": 3, "pub": "k9LpW5sD2f", "sig": "Tn7aH3gJ5c" },
+  "kyberPreKey": { "id": 31, "pub": "p8QwL2nR5sA", "sig": "Vb7cD1fG4hJ" },
   "oneTimePreKey": { "id": 48, "pub": "mC9eV2xB6Qw" }
 }
