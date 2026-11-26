@@ -47,7 +47,8 @@ internal object TestServices {
     fun create(
         verifier: PublicKeyVerifier = FakePublicKeyVerifier(),
         store: MailboxStore = InMemoryMailboxStore(),
-        inbox: InboxStore = InMemoryInboxStore(),
+        inbox: InboxStore =
+            InMemoryInboxStore((store as? InMemoryMailboxStore)?.let { mailboxStore -> mailboxStore::deliveryKeyHash }),
         atMillis: Long = ChallengeTestSupport.ISSUED_AT_MILLIS,
         policies: RateLimitPolicies = RateLimitPolicies(),
         trustProxyHeaders: Boolean = false,

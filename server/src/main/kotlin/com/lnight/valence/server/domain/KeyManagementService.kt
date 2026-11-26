@@ -8,6 +8,16 @@ class KeyManagementService(
 
     suspend fun status(mailboxId: String): PreKeyCounts? = store.preKeyCounts(mailboxId)
 
+    suspend fun updateDeliveryKeyHash(
+        mailboxId: String,
+        deliveryKeyHash: ByteArray,
+    ): DeliveryKeyUpdateResult =
+        when {
+            deliveryKeyHash.size != WireSizes.HASH -> DeliveryKeyUpdateResult.Malformed
+            store.replaceDeliveryKeyHash(mailboxId, deliveryKeyHash) -> DeliveryKeyUpdateResult.Updated
+            else -> DeliveryKeyUpdateResult.UnknownMailbox
+        }
+
     suspend fun replaceSignedPreKeys(
         mailboxId: String,
         replacement: PreKeyReplacement,

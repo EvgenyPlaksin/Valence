@@ -148,7 +148,14 @@ class MessageRoutesTest {
         testApplication {
             val inbox = InMemoryInboxStore()
             kotlinx.coroutines.runBlocking {
-                repeat(1_000) { inbox.append(id, NewMessage(ByteArray(1), fixtureTs, fixtureTs + 86_400_000L), 1_000) }
+                repeat(1_000) {
+                    inbox.append(
+                        id,
+                        ByteArray(32) { 9 },
+                        NewMessage(ByteArray(1), fixtureTs, fixtureTs + 86_400_000L),
+                        1_000,
+                    )
+                }
             }
             start(inbox)
 

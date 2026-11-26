@@ -2,6 +2,7 @@ package com.lnight.valence.server
 
 import com.lnight.valence.protocol.Base64Url
 import com.lnight.valence.protocol.GoldenFixtures
+import com.lnight.valence.protocol.ProtocolHeaders
 import com.lnight.valence.protocol.ProtocolJson
 import com.lnight.valence.protocol.ProtocolRoutes
 import com.lnight.valence.protocol.http.KeyStatusResponse
@@ -9,9 +10,11 @@ import com.lnight.valence.protocol.http.KyberPreKeyDto
 import com.lnight.valence.protocol.http.OneTimePreKeyDto
 import com.lnight.valence.protocol.http.ReplaceSignedPreKeysRequest
 import com.lnight.valence.protocol.http.SignedPreKeyDto
+import com.lnight.valence.protocol.http.UpdateDeliveryKeyRequest
 import com.lnight.valence.protocol.http.UploadOneTimeKyberPreKeysRequest
 import com.lnight.valence.protocol.http.UploadOneTimePreKeysRequest
 import com.lnight.valence.server.RegistrationTestSupport.MAILBOX_ID
+import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PublicKeyVerifier
@@ -19,6 +22,7 @@ import com.lnight.valence.server.store.InMemoryMailboxStore
 import io.ktor.client.HttpClient
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
@@ -29,7 +33,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import java.security.MessageDigest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 class KeyRoutesTest {
@@ -39,11 +45,12 @@ class KeyRoutesTest {
         verifier: PublicKeyVerifier = FakePublicKeyVerifier(),
         oneTimeCount: Int = 2,
         oneTimeKyberCount: Int = 0,
+        mailbox: Mailbox = RegistrationTestSupport.mailbox(),
     ): InMemoryMailboxStore {
         val keys = (1..oneTimeCount).map { OneTimePreKey(it, ByteArray(33) { 7 }) }
         val kyberKeys =
             RegistrationTestSupport.defaultOneTimeKyberPreKeys().take(oneTimeKyberCount)
-        val store = InMemoryMailboxStore().seed(RegistrationTestSupport.mailbox(), keys, kyberKeys)
+        val store = InMemoryMailboxStore().seed(mailbox, keys, kyberKeys)
         application { module(TestServices.create(verifier, store)) }
         return store
     }
@@ -76,6 +83,16 @@ class KeyRoutesTest {
         bearer: String? = token,
     ): HttpResponse =
         post(ProtocolRoutes.KEYS_KYBER_ONE_TIME) {
+            bearer?.let { bearerAuth(it) }
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+
+    private suspend fun HttpClient.updateDeliveryKey(
+        body: String,
+        bearer: String? = token,
+    ): HttpResponse =
+        put(ProtocolRoutes.KEYS_DELIVERY) {
             bearer?.let { bearerAuth(it) }
             contentType(ContentType.Application.Json)
             setBody(body)
@@ -126,6 +143,15 @@ class KeyRoutesTest {
             ),
         )
 
+    private fun updateDeliveryKeyJson(
+        version: Int = 2,
+        hash: ByteArray = ByteArray(32) { 42 },
+    ): String =
+        ProtocolJson.json.encodeToString(
+            UpdateDeliveryKeyRequest.serializer(),
+            UpdateDeliveryKeyRequest(version, Base64Url.encode(hash)),
+        )
+
     @Test
     fun `every key endpoint requires a valid token`() =
         testApplication {
@@ -139,6 +165,10 @@ class KeyRoutesTest {
                 HttpStatusCode.Unauthorized,
                 client.uploadKyber(uploadKyberJson(103..104), bearer = null).status,
             )
+            assertEquals(
+                HttpStatusCode.Unauthorized,
+                client.updateDeliveryKey(updateDeliveryKeyJson(), bearer = null).status,
+            )
         }
 
     @Test
@@ -149,6 +179,71 @@ class KeyRoutesTest {
             val response = client.status(bearer = FakeAccessTokens.bearer("mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa"))
 
             assertEquals(HttpStatusCode.Unauthorized, response.status)
+            assertEquals(
+                HttpStatusCode.Unauthorized,
+                client
+                    .updateDeliveryKey(
+                        updateDeliveryKeyJson(),
+                        bearer = FakeAccessTokens.bearer("mbx_aaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                    ).status,
+            )
+        }
+
+    @Test
+    fun `delivery key rotation accepts both supported protocol versions and is idempotent`() =
+        testApplication {
+            val store = start()
+            val hash = ByteArray(32) { 42 }
+
+            assertEquals(HttpStatusCode.NoContent, client.updateDeliveryKey(updateDeliveryKeyJson(1, hash)).status)
+            assertContentEquals(hash, store.find(MAILBOX_ID)?.deliveryKeyHash)
+            assertEquals(HttpStatusCode.NoContent, client.updateDeliveryKey(updateDeliveryKeyJson(2, hash)).status)
+        }
+
+    @Test
+    fun `rotating the hash rejects old delivery keys without consuming bundle keys`() =
+        testApplication {
+            val store = start(mailbox = DeliveryKeyTestSupport.mailbox(), oneTimeKyberCount = 1)
+            val newDeliveryKey = ByteArray(16) { 7 }
+            val newHash = MessageDigest.getInstance("SHA-256").digest(newDeliveryKey)
+            assertEquals(
+                HttpStatusCode.NoContent,
+                client.updateDeliveryKey(updateDeliveryKeyJson(hash = newHash)).status,
+            )
+
+            val oldKeyResponse =
+                client.get(ProtocolRoutes.PRE_KEYS.replace("{mailboxId}", MAILBOX_ID)) {
+                    header(ProtocolHeaders.DELIVERY_KEY, Base64Url.encode(DeliveryKeyTestSupport.deliveryKey))
+                }
+
+            assertEquals(HttpStatusCode.Unauthorized, oldKeyResponse.status)
+            assertEquals("", oldKeyResponse.bodyAsText())
+            assertEquals(2, store.oneTimePreKeyCount(MAILBOX_ID))
+            assertEquals(1, store.oneTimeKyberPreKeyCount(MAILBOX_ID))
+
+            val newKeyResponse =
+                client.get(ProtocolRoutes.PRE_KEYS.replace("{mailboxId}", MAILBOX_ID)) {
+                    header(ProtocolHeaders.DELIVERY_KEY, Base64Url.encode(newDeliveryKey))
+                }
+            assertEquals(HttpStatusCode.OK, newKeyResponse.status)
+        }
+
+    @Test
+    fun `delivery key rotation rejects unsupported versions and noncanonical hashes`() =
+        testApplication {
+            start()
+            val hash = Base64Url.encode(ByteArray(32) { 42 })
+
+            assertEquals(HttpStatusCode.BadRequest, client.updateDeliveryKey(updateDeliveryKeyJson(0)).status)
+            assertEquals(HttpStatusCode.BadRequest, client.updateDeliveryKey(updateDeliveryKeyJson(3)).status)
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                client.updateDeliveryKey(updateDeliveryKeyJson(hash = ByteArray(31))).status,
+            )
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                client.updateDeliveryKey("""{"v":2,"deliveryKeyHash":"$hash="}""").status,
+            )
         }
 
     @Test

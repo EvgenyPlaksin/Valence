@@ -112,7 +112,14 @@ class SendMessageServiceTest {
     fun `a full mailbox is rejected`() =
         runTest {
             mailboxes.create(DeliveryKeyTestSupport.mailbox(), emptyList())
-            repeat(1_000) { inbox.append(id, NewMessage(ByteArray(1), now, now + 86_400_000L), 1_000) }
+            repeat(1_000) {
+                inbox.append(
+                    id,
+                    DeliveryKeyTestSupport.mailbox().deliveryKeyHash,
+                    NewMessage(ByteArray(1), now, now + 86_400_000L),
+                    1_000,
+                )
+            }
 
             assertEquals(rejected(SendRejection.QUOTA_EXCEEDED), send())
         }

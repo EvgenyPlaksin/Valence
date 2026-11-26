@@ -7,9 +7,12 @@ import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.Registration
 import com.lnight.valence.server.domain.SignedPublicKey
 
-class RegisterRequestMapper {
-    fun toDomain(request: RegisterRequest): Registration? =
-        Parsing.orNull {
+class RegisterRequestMapper(
+    private val deliveryKeyHashMapper: DeliveryKeyHashMapper = DeliveryKeyHashMapper(),
+) {
+    fun toDomain(request: RegisterRequest): Registration? {
+        val deliveryKeyHash = deliveryKeyHashMapper.toDomain(request.deliveryKeyHash) ?: return null
+        return Parsing.orNull {
             Registration(
                 challenge = Base64Url.decode(request.challenge),
                 mailboxId = request.mailboxId,
@@ -21,10 +24,11 @@ class RegisterRequestMapper {
                     request.oneTimeKyberPreKeys.map {
                         OneTimeKyberPreKey(it.id, Base64Url.decode(it.pub), Base64Url.decode(it.sig))
                     },
-                deliveryKeyHash = Base64Url.decode(request.deliveryKeyHash),
+                deliveryKeyHash = deliveryKeyHash,
                 proof = Base64Url.decode(request.proof),
             )
         }
+    }
 
     private fun signed(
         id: Int,

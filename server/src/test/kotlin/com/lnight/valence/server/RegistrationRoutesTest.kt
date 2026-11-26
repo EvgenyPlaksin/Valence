@@ -1,5 +1,6 @@
 package com.lnight.valence.server
 
+import com.lnight.valence.protocol.Base64Url
 import com.lnight.valence.protocol.ProtocolJson
 import com.lnight.valence.protocol.ProtocolRoutes
 import com.lnight.valence.protocol.http.AccessTokenResponse
@@ -102,5 +103,30 @@ class RegistrationRoutesTest {
             val request = RegistrationTestSupport.registerRequest().copy(identityKey = "!!!")
 
             assertEquals(HttpStatusCode.BadRequest, client.register(json(request)).status)
+        }
+
+    @Test
+    fun `delivery key hash must be canonical unpadded base64url with 32 bytes`() =
+        testApplication {
+            start()
+            val hash = Base64Url.encode(ByteArray(32) { 9 })
+
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                client
+                    .register(json(RegistrationTestSupport.registerRequest().copy(deliveryKeyHash = "$hash=")))
+                    .status,
+            )
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                client
+                    .register(
+                        json(
+                            RegistrationTestSupport.registerRequest().copy(
+                                deliveryKeyHash = Base64Url.encode(ByteArray(31)),
+                            ),
+                        ),
+                    ).status,
+            )
         }
 }

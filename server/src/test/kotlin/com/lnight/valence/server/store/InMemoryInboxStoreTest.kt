@@ -25,7 +25,7 @@ class InMemoryInboxStoreTest {
         mailboxId: String = id,
         message: NewMessage = message(),
         maxQueued: Int = 1_000,
-    ): AppendResult = append(mailboxId, message, maxQueued)
+    ): AppendResult = append(mailboxId, ByteArray(32), message, maxQueued)
 
     private fun seq(result: AppendResult) = assertIs<AppendResult.Appended>(result).serverSeq
 

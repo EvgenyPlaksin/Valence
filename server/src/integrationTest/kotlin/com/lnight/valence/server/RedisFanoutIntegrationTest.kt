@@ -56,6 +56,7 @@ class RedisFanoutIntegrationTest {
                     val now = System.currentTimeMillis()
                     database.inboxStore.append(
                         mailbox.id,
+                        mailbox.deliveryKeyHash,
                         NewMessage(byteArrayOf(1), now, now + 60_000L),
                         10,
                     )
@@ -107,6 +108,7 @@ class RedisFanoutIntegrationTest {
                     assertEquals(false, session?.hasMessages)
                     database.inboxStore.append(
                         mailbox.id,
+                        mailbox.deliveryKeyHash,
                         NewMessage(
                             byteArrayOf(1),
                             System.currentTimeMillis(),

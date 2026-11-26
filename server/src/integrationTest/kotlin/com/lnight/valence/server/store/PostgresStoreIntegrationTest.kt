@@ -2,12 +2,14 @@ package com.lnight.valence.server.store
 
 import com.lnight.valence.server.DatabaseConfiguration
 import com.lnight.valence.server.domain.AppendResult
+import com.lnight.valence.server.domain.BundleResult
 import com.lnight.valence.server.domain.ConfirmResult
 import com.lnight.valence.server.domain.InboxPollResult
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.NewMessage
 import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
+import com.lnight.valence.server.domain.RateLimitDecision
 import com.lnight.valence.server.domain.SignedPublicKey
 import com.lnight.valence.server.routes.ServerMetrics
 import com.zaxxer.hikari.HikariDataSource
@@ -24,10 +26,12 @@ import org.testcontainers.containers.PostgreSQLContainer
 import java.sql.DriverManager
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -104,18 +108,36 @@ class PostgresStoreIntegrationTest {
                     database.mailboxStore.replaceSignedPreKeys(mailbox.id, signed(2), signed(30)),
                 )
 
-                val first = database.mailboxStore.takeBundle(mailbox.id)
-                val second = database.mailboxStore.takeBundle(mailbox.id)
-                val exhausted = database.mailboxStore.takeBundle(mailbox.id)
+                val first =
+                    assertIs<BundleResult.Found>(
+                        database.mailboxStore.takeBundle(mailbox.id, mailbox.deliveryKeyHash),
+                    ).bundle
+                val second =
+                    assertIs<BundleResult.Found>(
+                        database.mailboxStore.takeBundle(mailbox.id, mailbox.deliveryKeyHash),
+                    ).bundle
+                val exhausted =
+                    assertIs<BundleResult.Found>(
+                        database.mailboxStore.takeBundle(mailbox.id, mailbox.deliveryKeyHash),
+                    ).bundle
 
-                assertEquals(20, first?.oneTimePreKey?.id)
-                assertEquals(30, first?.oneTimeKyberPreKey?.id)
-                assertEquals(10, second?.oneTimePreKey?.id)
-                assertEquals(25, second?.oneTimeKyberPreKey?.id)
-                assertNull(exhausted?.oneTimePreKey)
-                assertNull(exhausted?.oneTimeKyberPreKey)
+                assertEquals(20, first.oneTimePreKey?.id)
+                assertEquals(30, first.oneTimeKyberPreKey?.id)
+                assertEquals(10, second.oneTimePreKey?.id)
+                assertEquals(25, second.oneTimeKyberPreKey?.id)
+                assertNull(exhausted.oneTimePreKey)
+                assertNull(exhausted.oneTimeKyberPreKey)
                 assertEquals(0, database.mailboxStore.oneTimePreKeyCount(mailbox.id))
                 assertEquals(0, database.mailboxStore.oneTimeKyberPreKeyCount(mailbox.id))
+            }
+        }
+
+    @Test
+    fun signedPrekeyReplacementPreservesIdValidation() =
+        runTest {
+            database().use { database ->
+                val mailbox = mailbox("mailbox-signed-prekey-update")
+                database.mailboxStore.create(mailbox, emptyList())
 
                 assertEquals(
                     com.lnight.valence.server.domain.KeyStoreOutcome.UPDATED,
@@ -144,12 +166,14 @@ class PostgresStoreIntegrationTest {
                 val first =
                     database.inboxStore.append(
                         mailbox.id,
+                        mailbox.deliveryKeyHash,
                         NewMessage(bytes(1), 1_000L, 10_000L),
                         maxQueued = 1,
                     )
                 val rejected =
                     database.inboxStore.append(
                         mailbox.id,
+                        mailbox.deliveryKeyHash,
                         NewMessage(bytes(2), 1_001L, 10_000L),
                         maxQueued = 1,
                     )
@@ -162,6 +186,7 @@ class PostgresStoreIntegrationTest {
                 val next =
                     database.inboxStore.append(
                         mailbox.id,
+                        mailbox.deliveryKeyHash,
                         NewMessage(bytes(3), 1_002L, 10_000L),
                         maxQueued = 1,
                     )
@@ -182,6 +207,7 @@ class PostgresStoreIntegrationTest {
                             async(Dispatchers.IO) {
                                 database.inboxStore.append(
                                     mailbox.id,
+                                    mailbox.deliveryKeyHash,
                                     NewMessage(bytes(value), 2_000L + value, 100_000L),
                                     maxQueued = 100,
                                 )
@@ -206,16 +232,129 @@ class PostgresStoreIntegrationTest {
                     (1..20)
                         .map {
                             async(Dispatchers.IO) {
-                                database.mailboxStore.takeBundle(mailbox.id)
+                                database.mailboxStore.takeBundle(mailbox.id, mailbox.deliveryKeyHash)
                             }
                         }.awaitAll()
-                val results = bundles.mapNotNull { it?.oneTimePreKey?.id }
-                val kyberResults = bundles.mapNotNull { it?.oneTimeKyberPreKey?.id }
+                val foundBundles = bundles.map { assertIs<BundleResult.Found>(it).bundle }
+                val results = foundBundles.mapNotNull { it.oneTimePreKey?.id }
+                val kyberResults = foundBundles.mapNotNull { it.oneTimeKyberPreKey?.id }
 
                 assertEquals((1..20).toSet(), results.toSet())
                 assertEquals((101..120).toSet(), kyberResults.toSet())
                 assertEquals(0, database.mailboxStore.oneTimePreKeyCount(mailbox.id))
                 assertEquals(0, database.mailboxStore.oneTimeKyberPreKeyCount(mailbox.id))
+            }
+        }
+
+    @Test
+    fun bundleFetchHoldingTheMailboxLockCompletesBeforeDeliveryKeyRotation() =
+        runTest {
+            database().use { database ->
+                val mailbox = mailbox("mailbox-bundle-before-rotation")
+                database.mailboxStore.create(
+                    mailbox,
+                    listOf(OneTimePreKey(1, bytes(11))),
+                    listOf(OneTimeKyberPreKey(101, bytes(12), bytes(64))),
+                )
+                val bundleHasLock = CountDownLatch(1)
+                val releaseBundle = CountDownLatch(1)
+                val updateStarted = CountDownLatch(1)
+                val bundle =
+                    async(Dispatchers.IO) {
+                        database.mailboxStore.takeBundle(mailbox.id, mailbox.deliveryKeyHash) {
+                            bundleHasLock.countDown()
+                            check(releaseBundle.await(5, TimeUnit.SECONDS))
+                            RateLimitDecision.Allowed
+                        }
+                    }
+
+                assertTrue(bundleHasLock.await(5, TimeUnit.SECONDS))
+                val update =
+                    async(Dispatchers.IO) {
+                        updateStarted.countDown()
+                        database.mailboxStore.replaceDeliveryKeyHash(mailbox.id, bytes(33))
+                    }
+                assertTrue(updateStarted.await(5, TimeUnit.SECONDS))
+                Thread.sleep(100)
+                assertFalse(update.isCompleted)
+                releaseBundle.countDown()
+
+                val result = assertIs<BundleResult.Found>(bundle.await()).bundle
+                assertEquals(1, result.oneTimePreKey?.id)
+                assertEquals(101, result.oneTimeKyberPreKey?.id)
+                assertTrue(update.await())
+                assertContentEquals(bytes(33), database.mailboxStore.find(mailbox.id)?.deliveryKeyHash)
+            }
+        }
+
+    @Test
+    fun rotationCommittedFirstRejectsBundleWithoutConsumingEitherPrekeyKind() =
+        runTest {
+            database().use { database ->
+                val mailbox = mailbox("mailbox-rotation-before-bundle")
+                database.mailboxStore.create(
+                    mailbox,
+                    listOf(OneTimePreKey(1, bytes(11))),
+                    listOf(OneTimeKyberPreKey(101, bytes(12), bytes(64))),
+                )
+                val configuration = databaseConfiguration()
+                DriverManager
+                    .getConnection(configuration.url, configuration.username, configuration.password)
+                    .use { connection ->
+                        connection.autoCommit = false
+                        connection
+                            .prepareStatement("UPDATE mailbox SET delivery_key_hash = ? WHERE mailbox_id = ?")
+                            .use { statement ->
+                                statement.setBytes(1, bytes(33))
+                                statement.setString(2, mailbox.id)
+                                assertEquals(1, statement.executeUpdate())
+                            }
+                        val fetchStarted = CountDownLatch(1)
+                        var rateLimitCalled = false
+                        val bundle =
+                            async(Dispatchers.IO) {
+                                fetchStarted.countDown()
+                                database.mailboxStore.takeBundle(mailbox.id, mailbox.deliveryKeyHash) {
+                                    rateLimitCalled = true
+                                    RateLimitDecision.Allowed
+                                }
+                            }
+                        assertTrue(fetchStarted.await(5, TimeUnit.SECONDS))
+                        Thread.sleep(100)
+                        connection.commit()
+
+                        assertEquals(BundleResult.Unauthorized, bundle.await())
+                        assertFalse(rateLimitCalled)
+                    }
+
+                assertEquals(1, database.mailboxStore.oneTimePreKeyCount(mailbox.id))
+                assertEquals(1, database.mailboxStore.oneTimeKyberPreKeyCount(mailbox.id))
+            }
+        }
+
+    @Test
+    fun staleDeliveryKeyCannotAppendOrChargeMailboxRateLimit() =
+        runTest {
+            database().use { database ->
+                val mailbox = mailbox("mailbox-stale-append")
+                database.mailboxStore.create(mailbox, emptyList())
+                assertTrue(database.mailboxStore.replaceDeliveryKeyHash(mailbox.id, bytes(33)))
+                var rateLimitCalled = false
+
+                val result =
+                    database.inboxStore.append(
+                        mailbox.id,
+                        mailbox.deliveryKeyHash,
+                        NewMessage(bytes(1), 1_000L, 10_000L),
+                        10,
+                    ) {
+                        rateLimitCalled = true
+                        RateLimitDecision.Allowed
+                    }
+
+                assertEquals(AppendResult.Unauthorized, result)
+                assertFalse(rateLimitCalled)
+                assertEquals(emptyList(), database.inboxStore.messagesAfter(mailbox.id, 0))
             }
         }
 
@@ -231,7 +370,7 @@ class PostgresStoreIntegrationTest {
                 )
                 installKyberDeleteFailure()
                 try {
-                    assertFails { database.mailboxStore.takeBundle(mailbox.id) }
+                    assertFails { database.mailboxStore.takeBundle(mailbox.id, mailbox.deliveryKeyHash) }
                 } finally {
                     removeKyberDeleteFailure()
                 }
@@ -247,9 +386,24 @@ class PostgresStoreIntegrationTest {
             database().use { database ->
                 val mailbox = mailbox("mailbox-replay")
                 database.mailboxStore.create(mailbox, emptyList())
-                database.inboxStore.append(mailbox.id, NewMessage(bytes(1), 1_000L, 2_000L), 10)
-                database.inboxStore.append(mailbox.id, NewMessage(bytes(2), 1_001L, 10_000L), 10)
-                database.inboxStore.append(mailbox.id, NewMessage(bytes(3), 1_002L, 10_000L), 10)
+                database.inboxStore.append(
+                    mailbox.id,
+                    mailbox.deliveryKeyHash,
+                    NewMessage(bytes(1), 1_000L, 2_000L),
+                    10,
+                )
+                database.inboxStore.append(
+                    mailbox.id,
+                    mailbox.deliveryKeyHash,
+                    NewMessage(bytes(2), 1_001L, 10_000L),
+                    10,
+                )
+                database.inboxStore.append(
+                    mailbox.id,
+                    mailbox.deliveryKeyHash,
+                    NewMessage(bytes(3), 1_002L, 10_000L),
+                    10,
+                )
 
                 assertEquals(1, database.inboxStore.purgeExpired(2_000L))
                 val replay = database.inboxStore.messagesAfter(mailbox.id, 1, nowMillis = 2_000L, limit = 10)
@@ -267,7 +421,12 @@ class PostgresStoreIntegrationTest {
             database().use { database ->
                 val mailbox = mailbox("mailbox-generation")
                 database.mailboxStore.create(mailbox, emptyList())
-                database.inboxStore.append(mailbox.id, NewMessage(bytes(1), 1_000L, 10_000L), 10)
+                database.inboxStore.append(
+                    mailbox.id,
+                    mailbox.deliveryKeyHash,
+                    NewMessage(bytes(1), 1_000L, 10_000L),
+                    10,
+                )
                 val originalGeneration = database.inboxStore.advanceSocketGeneration(mailbox.id)
 
                 assertEquals(1L, originalGeneration)
@@ -292,7 +451,12 @@ class PostgresStoreIntegrationTest {
             database().use { database ->
                 val mailbox = mailbox("mailbox-generation-race")
                 database.mailboxStore.create(mailbox, emptyList())
-                database.inboxStore.append(mailbox.id, NewMessage(bytes(1), 1_000L, 10_000L), 10)
+                database.inboxStore.append(
+                    mailbox.id,
+                    mailbox.deliveryKeyHash,
+                    NewMessage(bytes(1), 1_000L, 10_000L),
+                    10,
+                )
                 val originalGeneration = checkNotNull(database.inboxStore.advanceSocketGeneration(mailbox.id))
 
                 val start = CompletableDeferred<Unit>()
@@ -344,7 +508,12 @@ class PostgresStoreIntegrationTest {
                 database().use { second ->
                     val mailbox = mailbox("mailbox-purge-lock")
                     first.mailboxStore.create(mailbox, emptyList())
-                    first.inboxStore.append(mailbox.id, NewMessage(bytes(1), 1_000L, 2_000L), 10)
+                    first.inboxStore.append(
+                        mailbox.id,
+                        mailbox.deliveryKeyHash,
+                        NewMessage(bytes(1), 1_000L, 2_000L),
+                        10,
+                    )
                     val configuration = databaseConfiguration()
                     DriverManager
                         .getConnection(

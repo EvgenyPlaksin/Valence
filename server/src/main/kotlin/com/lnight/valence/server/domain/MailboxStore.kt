@@ -21,6 +21,11 @@ interface MailboxStore {
         kyberPreKey: SignedPublicKey,
     ): KeyStoreOutcome
 
+    suspend fun replaceDeliveryKeyHash(
+        mailboxId: String,
+        deliveryKeyHash: ByteArray,
+    ): Boolean
+
     suspend fun addOneTimePreKeys(
         mailboxId: String,
         keys: List<OneTimePreKey>,
@@ -33,5 +38,9 @@ interface MailboxStore {
         maxStored: Int,
     ): KeyStoreOutcome
 
-    suspend fun takeBundle(mailboxId: String): PreKeyBundle?
+    suspend fun takeBundle(
+        mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
+        rateLimit: () -> RateLimitDecision = { RateLimitDecision.Allowed },
+    ): BundleResult
 }

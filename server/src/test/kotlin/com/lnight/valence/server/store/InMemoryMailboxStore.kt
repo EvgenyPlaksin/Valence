@@ -1,5 +1,6 @@
 package com.lnight.valence.server.store
 
+import com.lnight.valence.server.domain.BundleResult
 import com.lnight.valence.server.domain.KeyStoreOutcome
 import com.lnight.valence.server.domain.Mailbox
 import com.lnight.valence.server.domain.MailboxStore
@@ -7,7 +8,9 @@ import com.lnight.valence.server.domain.OneTimeKyberPreKey
 import com.lnight.valence.server.domain.OneTimePreKey
 import com.lnight.valence.server.domain.PreKeyBundle
 import com.lnight.valence.server.domain.PreKeyCounts
+import com.lnight.valence.server.domain.RateLimitDecision
 import com.lnight.valence.server.domain.SignedPublicKey
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
 class InMemoryMailboxStore : MailboxStore {
@@ -49,6 +52,29 @@ class InMemoryMailboxStore : MailboxStore {
                 )
             }
         }
+
+    override suspend fun replaceDeliveryKeyHash(
+        mailboxId: String,
+        deliveryKeyHash: ByteArray,
+    ): Boolean {
+        var updated = false
+        mailboxes.computeIfPresent(mailboxId) { _, stored ->
+            updated = true
+            StoredMailbox(
+                Mailbox(
+                    stored.mailbox.id,
+                    stored.mailbox.identityKey,
+                    stored.mailbox.signedPreKey,
+                    stored.mailbox.kyberPreKey,
+                    deliveryKeyHash,
+                    stored.mailbox.createdAtMillis,
+                ),
+                stored.oneTimePreKeys,
+                stored.oneTimeKyberPreKeys,
+            )
+        }
+        return updated
+    }
 
     override suspend fun addOneTimePreKeys(
         mailboxId: String,
@@ -100,22 +126,43 @@ class InMemoryMailboxStore : MailboxStore {
             }
         }
 
-    override suspend fun takeBundle(mailboxId: String): PreKeyBundle? {
-        var bundle: PreKeyBundle? = null
+    override suspend fun takeBundle(
+        mailboxId: String,
+        expectedDeliveryKeyHash: ByteArray,
+        rateLimit: () -> RateLimitDecision,
+    ): BundleResult {
+        var result: BundleResult = BundleResult.Unauthorized
         mailboxes.computeIfPresent(mailboxId) { _, stored ->
             val mailbox = stored.mailbox
-            bundle =
-                PreKeyBundle(
-                    identityKey = mailbox.identityKey,
-                    signedPreKey = mailbox.signedPreKey,
-                    kyberPreKey = mailbox.kyberPreKey,
-                    oneTimePreKey = stored.oneTimePreKeys.firstOrNull(),
-                    oneTimeKyberPreKey = stored.oneTimeKyberPreKeys.firstOrNull(),
-                )
-            StoredMailbox(mailbox, stored.oneTimePreKeys.drop(1), stored.oneTimeKyberPreKeys.drop(1))
+            if (!MessageDigest.isEqual(expectedDeliveryKeyHash, mailbox.deliveryKeyHash)) {
+                stored
+            } else {
+                when (val decision = rateLimit()) {
+                    is RateLimitDecision.Limited -> {
+                        result = BundleResult.RateLimited(decision.retryAfterMillis)
+                        stored
+                    }
+
+                    RateLimitDecision.Allowed -> {
+                        result =
+                            BundleResult.Found(
+                                PreKeyBundle(
+                                    identityKey = mailbox.identityKey,
+                                    signedPreKey = mailbox.signedPreKey,
+                                    kyberPreKey = mailbox.kyberPreKey,
+                                    oneTimePreKey = stored.oneTimePreKeys.firstOrNull(),
+                                    oneTimeKyberPreKey = stored.oneTimeKyberPreKeys.firstOrNull(),
+                                ),
+                            )
+                        StoredMailbox(mailbox, stored.oneTimePreKeys.drop(1), stored.oneTimeKyberPreKeys.drop(1))
+                    }
+                }
+            }
         }
-        return bundle
+        return result
     }
+
+    internal fun deliveryKeyHash(mailboxId: String): ByteArray? = mailboxes[mailboxId]?.mailbox?.deliveryKeyHash
 
     private fun update(
         mailboxId: String,

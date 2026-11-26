@@ -22,7 +22,7 @@ class PurgeTest {
     private suspend fun InMemoryInboxStore.add(
         mailboxId: String,
         expiresAt: Long,
-    ) = append(mailboxId, NewMessage(ByteArray(1), 1_000L, expiresAt), 1_000)
+    ) = append(mailboxId, ByteArray(32), NewMessage(ByteArray(1), 1_000L, expiresAt), 1_000)
 
     @Test
     fun `purging removes expired messages in every mailbox and reports the count`() =

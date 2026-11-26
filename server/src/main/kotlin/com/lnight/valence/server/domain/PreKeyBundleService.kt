@@ -11,15 +11,8 @@ class PreKeyBundleService(
         deliveryKey: ByteArray,
     ): BundleResult {
         val mailbox = authenticator.authenticate(mailboxId, deliveryKey) ?: return BundleResult.Unauthorized
-        return when (val decision = limiter.tryAcquire("bundle:mailbox:${mailbox.id}", mailboxPolicy)) {
-            is RateLimitDecision.Limited -> {
-                BundleResult.RateLimited(decision.retryAfterMillis)
-            }
-
-            RateLimitDecision.Allowed -> {
-                store.takeBundle(mailbox.id)?.let { BundleResult.Found(it) }
-                    ?: BundleResult.Unauthorized
-            }
+        return store.takeBundle(mailbox.id, mailbox.deliveryKeyHash) {
+            limiter.tryAcquire("bundle:mailbox:${mailbox.id}", mailboxPolicy)
         }
     }
 }
