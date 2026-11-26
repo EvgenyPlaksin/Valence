@@ -1,5 +1,6 @@
 plugins {
     id("valence.android.library")
+    id("valence.android.hilt")
 }
 
 android {
@@ -7,5 +8,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":core:model"))
     implementation("com.lnight.valence:protocol")
+
+    testImplementation(libs.junit)
 }

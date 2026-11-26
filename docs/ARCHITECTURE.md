@@ -573,6 +573,7 @@ The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/
 
 ```json
 {
+  "v": 2,
   "kind": "text",
   "messageId": "01J9ZQ3M5X7K2R8T4W6Y0B1C2D",
   "sentAt": 1760000000000,
@@ -583,6 +584,8 @@ The endpoints that manage a mailbox's own keys live under `/v1/keys/`. `GET /v1/
   "padding": "AAAA..."
 }
 ```
+
+`AttachmentRef` is provisional until the separate Attachments specification is completed (section 6).
 
 The sender's mailbox ID is not repeated inside the plaintext. The authoritative sender is the verified sender certificate of the sealed envelope, which must match the session's identity key.
 
@@ -1072,8 +1075,8 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 | Attachments | Encrypted blob store with client-held keys | Separate spec; the message plaintext carries only the blob reference and key |
 | Registration abuse control | How to limit mass registration | Per-IP rate limits first. Proof-of-work can be added later because the challenge format can carry a puzzle. |
 | One-time prekey drain | A holder of a delivery key can exhaust a mailbox's one-time prekeys by fetching bundles repeatedly | Mitigated by a per-recipient limit on bundle fetches, 10 burst and one every 10 seconds (see 4.1), but not eliminated. The bundle degrades gracefully to the signed and Kyber prekeys when the one-time prekeys run out. |
-| Unknown frame types | Ignore vs. close the connection when a frame `type` is not recognised | The server answers an unknown or invalid client frame with an `error` frame (`INVALID_FRAME`), which is implemented. Clients ignore unknown server frame types, which is not implemented yet: decoding currently fails on an unknown `type`. |
-| Plaintext structure location | `protocol/` vs. a client-only module | Keep the definition and golden fixtures in `protocol/`, and expose it to `:core:data` through a codec interface in `:core:model` that `:core:network` implements, so rule 6 of section 2.3 still holds. |
+| Unknown frame types | Ignore vs. close the connection when a frame `type` is not recognised | The server answers an unknown or invalid client frame with an `error` frame (`INVALID_FRAME`). Fallback decoding of unknown server frames is implemented in `protocol/`; runtime WebSocket consumer wiring remains pending the `:core:network` transport. |
+| Plaintext structure location | `protocol/` vs. a client-only module | **Decided and implemented:** the contract and golden fixtures live in `protocol/`; the `:core:model` codec port is implemented by `:core:network`, preserving rule 6 of section 2.3. |
 
 ---
 
