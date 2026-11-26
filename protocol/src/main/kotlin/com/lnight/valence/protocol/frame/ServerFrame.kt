@@ -5,7 +5,14 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-sealed interface ServerFrame
+sealed interface ServerFrame {
+    @Serializable(with = UnknownServerFrameSerializer::class)
+    @SerialName("unknown")
+    data class Unknown(
+        val v: Int = ProtocolVersion.CURRENT,
+        val rawType: String? = null,
+    ) : ServerFrame
+}
 
 @Serializable
 @SerialName("message.deliver")
