@@ -48,5 +48,8 @@ jobs:
       - name: Architecture tests
         run: ./gradlew :architecture-tests:test
 
+      - name: Unit tests
+        run: ./gradlew test
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug
