@@ -32,7 +32,12 @@ class KeyManagementContractTest {
             ContractAssertions.roundTrip("update-delivery-key-request", UpdateDeliveryKeyRequest.serializer())
 
         assertEquals(2, request.v)
-        assertEquals(32, com.lnight.valence.protocol.Base64Url.decode(request.deliveryKeyHash).size)
+        assertEquals(
+            32,
+            com.lnight.valence.protocol.Base64Url
+                .decode(request.deliveryKeyHash)
+                .size,
+        )
     }
 
     @Test

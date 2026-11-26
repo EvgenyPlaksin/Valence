@@ -72,7 +72,15 @@ class SocketShutdownTest {
             val stop = start(drainMillis = 2_000, inbox = inbox)
             val client = createClient { install(WebSockets) }
             val existingSession = client.webSocketSession("/v1/socket") { bearerAuth(token) }
-            val generationBeforeStop = inbox.currentSocketGeneration(RegistrationTestSupport.MAILBOX_ID)
+            val generationBeforeStop =
+                withTimeout(5.seconds) {
+                    var generation = inbox.currentSocketGeneration(RegistrationTestSupport.MAILBOX_ID)
+                    while (generation == null) {
+                        delay(10)
+                        generation = inbox.currentSocketGeneration(RegistrationTestSupport.MAILBOX_ID)
+                    }
+                    generation
+                }
             val stopFuture = CompletableFuture.runAsync { stop() }
 
             val readyResponse =
