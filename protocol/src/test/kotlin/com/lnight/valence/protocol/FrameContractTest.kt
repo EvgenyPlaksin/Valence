@@ -6,9 +6,12 @@ import com.lnight.valence.protocol.frame.ErrorCode
 import com.lnight.valence.protocol.frame.ErrorFrame
 import com.lnight.valence.protocol.frame.MessageDeliverFrame
 import com.lnight.valence.protocol.frame.ServerFrame
+import com.lnight.valence.protocol.frame.ServerFrameSerializer
 import com.lnight.valence.protocol.frame.SyncResumeFrame
+import kotlinx.serialization.SerializationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
 class FrameContractTest {
@@ -46,5 +49,32 @@ class FrameContractTest {
         val frame = assertIs<ErrorFrame>(ContractAssertions.roundTrip("error-invalid-frame", ServerFrame.serializer()))
 
         assertEquals(ErrorCode.INVALID_FRAME, frame.code)
+    }
+
+    @Test
+    fun `unknown server frame matches its fixture`() {
+        val frame =
+            assertIs<ServerFrame.Unknown>(
+                ContractAssertions.roundTrip("server-frame-unknown", ServerFrameSerializer),
+            )
+
+        assertEquals("presence.update", frame.rawType)
+        assertEquals(2, frame.v)
+    }
+
+    @Test
+    fun `malformed server frames fail serialization`() {
+        assertFailsWith<SerializationException> {
+            ProtocolJson.decodeServerFrame("123")
+        }
+        assertFailsWith<SerializationException> {
+            ProtocolJson.decodeServerFrame("\"not an object\"")
+        }
+        assertFailsWith<SerializationException> {
+            ProtocolJson.decodeServerFrame("""{"v":2}""")
+        }
+        assertFailsWith<SerializationException> {
+            ProtocolJson.decodeServerFrame("""{"type":123,"v":2}""")
+        }
     }
 }

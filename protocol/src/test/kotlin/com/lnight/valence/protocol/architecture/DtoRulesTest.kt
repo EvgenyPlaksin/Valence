@@ -6,8 +6,8 @@ import com.lemonappdev.konsist.api.verify.assertTrue
 import kotlin.test.Test
 
 class DtoRulesTest {
-    private val bodySuffixes = listOf("Request", "Response", "Frame")
-    private val wireSuffixes = bodySuffixes + "Dto"
+    private val bodySuffixes = listOf("Request", "Response", "Frame", "Payload")
+    private val wireSuffixes = bodySuffixes + listOf("Dto", "Ref", "Unknown")
 
     @Test
     fun `wire types are serializable`() {
@@ -30,7 +30,7 @@ class DtoRulesTest {
         Konsist
             .scopeFromProduction()
             .classes()
-            .assertTrue { !it.isWireType() || it.properties().all { property -> property.hasValModifier } }
+            .assertTrue { !it.isWireType() || it.properties().all { property -> property.isVal } }
     }
 
     @Test
@@ -69,5 +69,11 @@ class DtoRulesTest {
     }
 
     private fun KoClassDeclaration.isWireType(): Boolean =
-        resideInPackage("..protocol.http..") || resideInPackage("..protocol.frame..")
+        (
+            resideInPackage("..protocol.http..") ||
+                resideInPackage("..protocol.frame..") ||
+                resideInPackage("..protocol.plaintext..")
+        ) &&
+            !hasNameEndingWith("Serializer") &&
+            !hasNameEndingWith("Codec")
 }

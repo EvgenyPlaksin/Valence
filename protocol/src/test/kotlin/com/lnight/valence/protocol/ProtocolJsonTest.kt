@@ -3,6 +3,7 @@ package com.lnight.valence.protocol
 import com.lnight.valence.protocol.frame.ErrorCode
 import com.lnight.valence.protocol.frame.ErrorFrame
 import com.lnight.valence.protocol.frame.MessageDeliverFrame
+import com.lnight.valence.protocol.frame.ServerFrame
 import com.lnight.valence.protocol.frame.SyncResumeFrame
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -33,5 +34,24 @@ class ProtocolJsonTest {
         val frame = ProtocolJson.decodeServerFrame("""{"type":"error","v":1,"code":"SOMETHING_NEW"}""")
 
         assertEquals(ErrorCode.UNKNOWN, assertIs<ErrorFrame>(frame).code)
+    }
+
+    @Test
+    fun `unknown server frame type decodes to Unknown frame`() {
+        val frame = ProtocolJson.decodeServerFrame("""{"type":"chat.typing","v":2,"user":"u1"}""")
+
+        val unknown = assertIs<ServerFrame.Unknown>(frame)
+        assertEquals("chat.typing", unknown.rawType)
+        assertEquals(2, unknown.v)
+    }
+
+    @Test
+    fun `encoding Unknown server frame outputs rawType`() {
+        val unknown = ServerFrame.Unknown(v = 2, rawType = "chat.typing")
+        val text = ProtocolJson.encodeServerFrame(unknown)
+        val json = ProtocolJson.json.parseToJsonElement(text).jsonObject
+
+        assertEquals("chat.typing", json.getValue("type").jsonPrimitive.content)
+        assertEquals("2", json.getValue("v").jsonPrimitive.content)
     }
 }
