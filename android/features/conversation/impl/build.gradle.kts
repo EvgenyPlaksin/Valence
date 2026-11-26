@@ -11,4 +11,9 @@ dependencies {
     implementation(project(":features:conversation:api"))
     implementation(project(":core:model"))
     implementation(project(":core:common"))
+
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+
+    testImplementation(libs.junit)
 }
