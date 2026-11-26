@@ -236,7 +236,7 @@ It contains no cryptography, no Android code, and no Ktor code. Wire DTOs are de
 | `:core:model` | Domain entities (`Message`, `Contact`, `Conversation`, `MessageStatus`), value classes (`MailboxId`, `MessageId`), repository interfaces | Immutable data types, repository interfaces | Nothing; has zero Android dependencies |
 | `:core:common` | `DispatcherProvider`, `Clock`, `IdGenerator`, `AppResult<T>`, error taxonomy | Interfaces | Implementations |
 | `:core:crypto` | Key generation, Keystore wrapping, session establishment, message encryption, Sealed Sender, safety numbers | `KeyStore`, `SessionCipher`, `SealedSender`, `PreKeyProvider`, `SafetyNumberGenerator`, and the `SignalStateStore` port | libsignal and all of its types, raw key bytes, ratchet internals |
-| `:core:database` | Room schema, DAOs, SQLCipher integration, migrations, type converters | DAO interfaces, `ValenceDatabase` | Entity classes are `internal` and mapped at the boundary |
+| `:core:database` | Room schema, DAOs, SQLCipher integration, migrations, type converters | `ValenceDatabase`, local-store facades, storage DTOs | Room entities and `@Dao` interfaces are `internal` and mapped at the boundary |
 | `:core:network` | HTTP client, WebSocket transport, reconnection, auth interceptor, mapping between `protocol` DTOs and domain types | `MessageTransport`, `PreKeyApi`, `RegistrationApi`, `SenderCertificateApi` interfaces | OkHttp/Ktor client types, retry policy, TLS pinning, `protocol` DTOs |
 | `:core:data` | Repository implementations binding crypto, database, and network; the adapter implementing `SignalStateStore` over the DAOs | `MessageRepository`, `ContactRepository`, `SessionRepository` | Orchestration, inbound pipeline, outbox |
 | `:core:ui-theme` | Theme, typography, spacing tokens, reusable stateless composables | `ValenceTheme`, shared components | Nothing business-related |
@@ -681,6 +681,8 @@ CREATE TABLE kyber_prekey (
     wrapped_private   BLOB    NOT NULL,
     wrap_iv           BLOB    NOT NULL,
     signature         BLOB    NOT NULL,
+    role              INTEGER NOT NULL CHECK (role IN (0, 1)),
+    uploaded          INTEGER NOT NULL DEFAULT 0,
     created_at        INTEGER NOT NULL,
     retired_at        INTEGER
 );
@@ -715,6 +717,8 @@ CREATE TABLE sender_certificate (
 ```
 
 The session record is libsignal's serialised session state, including its skipped message keys. It is encrypted as a single blob and written in the same transaction as the message it advanced (see 4.3). This guarantees that the ratchet never advances without the corresponding message being persisted, and vice versa. The delivery key and the contacts' delivery keys are bearer credentials that authorise sends, not decryption keys, so file-level SQLCipher protection is sufficient for them.
+
+`kyber_prekey.role` is `0 = LAST_RESORT` or `1 = ONE_TIME`. Both roles share the table's primary-key namespace. At most one non-retired last-resort key is allowed; its replacement retires the prior key in the same transaction, and retired last-resort keys remain available for 30 days. Only one-time Kyber keys are deleted when consumed.
 
 **Contacts and conversations**
 
@@ -762,15 +766,19 @@ CREATE TABLE message (
 );
 
 CREATE INDEX idx_message_timeline ON message (conversation_id, sent_at DESC, message_id DESC);
-CREATE UNIQUE INDEX idx_message_server_seq ON message (server_seq) WHERE server_seq IS NOT NULL;
+CREATE UNIQUE INDEX idx_message_server_seq ON message (server_seq);
 
 CREATE TABLE outbox (
     message_id         TEXT PRIMARY KEY REFERENCES message(message_id) ON DELETE CASCADE,
     envelope_blob      BLOB,
     attempt_count      INTEGER NOT NULL DEFAULT 0,
     next_attempt_at    INTEGER NOT NULL,
-    last_error         TEXT
+    state              INTEGER NOT NULL DEFAULT 0 CHECK (state IN (0, 1)),
+    expires_at         INTEGER NOT NULL,
+    last_error         INTEGER
 );
+
+CREATE INDEX idx_outbox_due ON outbox (state, next_attempt_at);
 
 CREATE TABLE sync_cursor (
     id                 INTEGER PRIMARY KEY CHECK (id = 1),
@@ -781,8 +789,9 @@ CREATE TABLE sync_cursor (
 `direction`: `0 = INBOUND`, `1 = OUTBOUND`.
 `status`: `0 = PENDING`, `1 = SENT` (server accepted), `2 = DELIVERED`, `3 = READ`, `4 = FAILED`.
 `kind`: `0 = TEXT`, `1 = ATTACHMENT`, `2 = SYSTEM`.
+`outbox.state`: `0 = READY`, `1 = PAUSED_DELIVERY_KEY`.
 
-`server_seq` is the sequence number of the **recipient's** inbox, so it is meaningful only for `INBOUND` rows in the owner's own inbox. Outbound rows keep `server_seq` null and record only `server_ts`. This keeps the unique index free of collisions between the two sequences. `outbox.envelope_blob` is null until the message has been encrypted (see 4.4).
+`server_seq` is the sequence number of the **recipient's** inbox, so it is meaningful only for `INBOUND` rows in the owner's own inbox. Outbound rows keep `server_seq` null and record only `server_ts`; the DAO/mapper boundary rejects outbound messages with a non-null `server_seq`. SQLite permits multiple nulls in the unique index. `outbox.envelope_blob` is null until the message has been encrypted (see 4.4). `expires_at` is set to the message's enqueue time plus 30 days. `last_error` is a bounded numeric code and never stores response bodies, keys, or tokens.
 
 Message bodies are protected by SQLCipher at the file level. No per-field encryption is layered on top, because that would defeat `LIKE`/FTS and duplicate the file-level guarantee.
 
@@ -979,7 +988,7 @@ class InboundPipeline @Inject constructor(
 }
 ```
 
-**Atomic persistence.** libsignal decrypts synchronously against its stores. `decryptAndPersist` therefore loads the session record and any prekeys it needs into an in-memory store, decrypts, and then executes one Room transaction containing: write the advanced session record, delete any consumed one-time prekey, insert the message (idempotent on `message_id`), update the conversation summary, and advance `sync_cursor`. If any step fails the transaction rolls back and the session is unchanged. A replayed envelope is rejected by the ratchet and reported as `Duplicate`. Confirmation is sent to the server **only after commit**.
+**Atomic persistence.** libsignal decrypts synchronously against its stores. `decryptAndPersist` therefore loads the session record and any prekeys it needs into an in-memory store, decrypts, and then executes one Room transaction containing: write the advanced session record, delete any consumed one-time EC or Kyber prekey (never the retained last-resort Kyber key), insert the message (idempotent on `message_id`), update the conversation summary, and advance `sync_cursor`. If any step fails the transaction rolls back and the session is unchanged. A replayed envelope is rejected by the ratchet and reported as `Duplicate`. Confirmation is sent to the server **only after commit**.
 
 **Confirmation batching.** `ConfirmationBatcher` coalesces sequence numbers and emits one `delivery.confirm(upToServerSeq)` per window using `debounce`/`conflate`, reducing outbound chatter during bursts from N frames to roughly one per quarter second.
 
@@ -987,11 +996,11 @@ class InboundPipeline @Inject constructor(
 
 ### 4.4 Outbound Path
 
-1. The ViewModel invokes `SendMessageUseCase`. In one transaction it inserts the `message` row (`PENDING`) and the `outbox` row with a null `envelope_blob`. The UI updates immediately from the database.
+1. The ViewModel invokes `SendMessageUseCase`. In one transaction it inserts the `message` row (`PENDING`) and the `outbox` row with a null `envelope_blob`, `state = READY`, and `expires_at` set to 30 days after enqueue. The UI updates immediately from the database.
 2. An `OutboundDispatcher` coroutine consumes a `Channel<MessageId>` signalled by the outbox. On `Dispatchers.Default` (within the same per-contact shard rule) it encrypts the padded plaintext, seals it with a valid sender certificate, and in one transaction writes the advanced session record and the finished `envelope_blob`. A crash therefore never loses a ratchet step without its envelope.
 3. The dispatcher sends the stored envelope with an anonymous `POST /v1/messages/{to}` using the contact's delivery key. On `201` the message moves to `SENT`, records `serverTs`, and the outbox row is deleted.
 4. Failures follow exponential backoff with jitter, persisted in `next_attempt_at`. Retries resend the stored envelope bytes and never re-encrypt. A WorkManager job (`NetworkType.CONNECTED`) guarantees retry when the process is not alive.
-5. A `401` caused by a stale delivery key is indistinguishable from other authorization failures. Pause retries for that contact while retaining `envelope_blob`; do not re-encrypt or repeatedly retry with the old key. Resume only after processing an authenticated encrypted delivery-key rotation notice from the contact, then resend the same envelope with the new key. The client offers manual invite/QR re-import or cancellation if no notice arrives. An unrecovered outbox item fails when its 30-day TTL window ends.
+5. A `401` caused by a stale delivery key is indistinguishable from other authorization failures. Atomically set every queued item for that contact to `PAUSED_DELIVERY_KEY` while retaining `envelope_blob`; do not re-encrypt or repeatedly retry with the old key. Resume those items atomically only after processing an authenticated encrypted delivery-key rotation notice from the contact, then resend the same envelopes with the new key. The client offers manual invite/QR re-import or cancellation if no notice arrives. When `expires_at` is reached, mark an unrecovered message `FAILED` and remove its outbox row.
 
 ### 4.5 Connection Lifecycle and Resilience
 
@@ -1043,7 +1052,7 @@ All dispatchers are injected through `DispatcherProvider` to keep the pipeline d
 
 **Deployment.** The server runs on x86_64 Linux with glibc, as libsignal requires, in a container built from `server/Dockerfile` with the repository root as the build context. Configuration is by environment variables: `PORT`, `VALENCE_DATABASE_URL`, `VALENCE_DATABASE_USER`, `VALENCE_DATABASE_PASSWORD`, `VALENCE_DB_MAX_CONNECTIONS` (default 10), `VALENCE_DB_AUTO_MIGRATE` (default true), `VALENCE_SHUTDOWN_DRAIN_MS` (default 0, maximum 60,000), optional `VALENCE_REDIS_URL` and `VALENCE_REDIS_CHANNEL_PREFIX`, `VALENCE_CHALLENGE_KEY`, `VALENCE_TOKEN_KEY`, `VALENCE_SERVER_CERTIFICATE`, `VALENCE_CERTIFICATE_KEY`, and optionally `VALENCE_TRUST_PROXY_HEADERS` and `VALENCE_METRICS_TOKEN`. Redis 8 is used under its AGPLv3 licensing option for Pub/Sub signalling only. Redis is optional at startup; `/ready` validates PostgreSQL and returns 503 during shutdown drain, and Redis disconnection is reported as degraded notification service while polling preserves delivery. Redis is reachable only over a private network, uses ACL-limited credentials, enables TLS when crossing a trust boundary, and exposes no public port. When Redis is configured, `VALENCE_REDIS_CHANNEL_PREFIX` is required and isolates channels by environment. At startup, the server validates database connectivity and runs Flyway migrations automatically unless `VALENCE_DB_AUTO_MIGRATE=false`. During rollout, apply additive migrations first and do not rely on generation fencing or enable multi-instance traffic until every node runs the fencing-capable version. The total PostgreSQL connection budget is the per-instance Hikari maximum multiplied by the number of server instances, plus operational headroom. The health endpoint (`/health`) reports process liveness; the readiness endpoint (`/ready`) validates database connectivity outside shutdown. The key ceremony has three commands, `generateTrustRoot`, `generateServerKey`, and `signServerCertificate`, so that the trust root private key is only ever used on an offline machine. A fourth command, `generateCertificateKeys`, prints every key at once for development and must not be used for production. A continuous integration job builds the image and checks that the container starts, loads libsignal, and answers its health, readiness, challenge, and authentication endpoints. `docs/OPERATIONS.md` is the runbook.
 
-**Licensing.** libsignal is licensed under AGPL-3.0. Valence must therefore be distributed under AGPL-3.0 or a licence that is compatible with it for the combined work. The server component that links libsignal falls under AGPL's network-use clause, which is satisfied by publishing its source. See section 6.
+**Licensing.** libsignal is licensed under AGPL-3.0. Valence must therefore be distributed under AGPL-3.0 or a licence that is compatible with it for the combined work. The server component that links libsignal falls under AGPL's network-use clause, which is satisfied by publishing its source. SQLCipher Android Community Edition is BSD-3-Clause and requires its attribution notice in user-accessible app licensing/about materials; track the app notice before release. See section 6.
 
 ---
 

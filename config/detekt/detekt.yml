@@ -1,3 +1,15 @@
+complexity:
+  TooManyFunctions:
+    ignorePrivate: true
+    ignoreAnnotatedFunctions:
+      - Provides
+    excludes:
+      - "**/KeyDao.kt"
+      - "**/LocalKeyStore.kt"
+      - "**/ValenceDatabase.kt"
+      - "**/test/**"
+      - "**/androidTest/**"
+
 naming:
   FunctionNaming:
     ignoreAnnotated:

@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.compose.compiler) apply false
     alias(libs.plugins.ksp) apply false
     alias(libs.plugins.hilt) apply false
+    alias(libs.plugins.androidx.room) apply false
     alias(libs.plugins.spotless)
     alias(libs.plugins.detekt)
     id("valence.module-graph")

@@ -15,6 +15,8 @@ import com.lnight.valence.core.model.MessageStatus
 import com.lnight.valence.core.model.repository.MessageEnqueueFailure
 import com.lnight.valence.core.model.repository.MessageEnqueueResult
 import com.lnight.valence.core.model.repository.MessageRepository
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -103,6 +105,10 @@ class SendMessageUseCaseTest {
             enqueuedMessages += message
             return enqueueResult
         }
+
+        override fun observeMessages(conversationId: ConversationId): Flow<List<Message>> = flowOf(emptyList())
+
+        override suspend fun findMessage(messageId: MessageId): Message? = null
     }
 
     private object FixedIdGenerator : IdGenerator {
